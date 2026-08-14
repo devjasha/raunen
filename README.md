@@ -42,10 +42,28 @@ commands, and keeps the conversation where you can see it.
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/devjasha/raunen/main/install.sh | sh
+```
+
+macOS and Linux, Intel and ARM. Downloads the binary for your platform into
+`~/.local/bin`, verifies it against the release checksums, and tells you if that
+directory is not on your `PATH`. Set `RAUNEN_INSTALL_DIR` to put it elsewhere,
+or `RAUNEN_VERSION=v0.1.0` to pin a version.
+
+Piping a script into a shell is worth reading first:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/devjasha/raunen/main/install.sh | less
+```
+
+Or from source, which needs Go 1.25 or newer:
+
+```sh
 go build -o ~/.local/bin/raunen .
 ```
 
-Go 1.25 or newer. The binary is about 11 MB and depends on nothing at runtime.
+Nothing is needed at runtime either way — one static binary, about 3 MB
+compressed.
 
 ## Use
 
@@ -57,6 +75,7 @@ raunen --continue                   # resume this directory's last session
 raunen --sessions                   # list saved sessions
 raunen --running                    # list running instances
 raunen -config                      # print the config path
+raunen -version                     # print the version
 ```
 
 | Key | |

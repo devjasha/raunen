@@ -96,9 +96,13 @@ func usageStyle(pct int) lipgloss.Style {
 const prompt = "› "
 
 // chromeLines is everything below the transcript apart from the input's own
-// rows: a status row, the input's top and bottom border, and the bar beneath
-// it. The count is unchanged by where the bar sits, only the order is.
-const chromeLines = 4
+// rows: a status row, the input's top and bottom border, the bar beneath it,
+// and the bottom gutter.
+const chromeLines = 4 + padBottom
+
+// padBottom is blank rows kept under the status bar, so the frame does not sit
+// flush against the last row of the terminal.
+const padBottom = 1
 
 // maxInputRows caps how tall the input may grow, so that a long message cannot
 // squeeze the transcript off the screen.
@@ -1045,6 +1049,9 @@ func (m Model) View() tea.View {
 	// The bar sits under the input: where you are and how full the context is
 	// are reference, not something to read past on the way to typing.
 	rows = append(rows, m.bar())
+	for i := 0; i < padBottom; i++ {
+		rows = append(rows, "")
+	}
 
 	// The gutter is applied once here rather than baked into every component,
 	// so each of them can go on measuring against innerWidth alone. Blank rows

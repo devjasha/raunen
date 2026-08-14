@@ -1,5 +1,8 @@
 # built binary
 /raunen
 
+# release artefacts, uploaded to GitHub releases rather than committed
+/dist/
+
 # session store, if anyone points XDG at the checkout
 /sessions/

@@ -37,9 +37,14 @@ func run() error {
 		continued  = flag.Bool("continue", false, "resume the most recent session for this directory")
 		listSess   = flag.Bool("sessions", false, "list saved sessions and exit")
 		listRun    = flag.Bool("running", false, "list running raunen instances and exit")
+		showVer    = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
 
+	if *showVer {
+		fmt.Println("raunen", version)
+		return nil
+	}
 	if *printPath {
 		fmt.Println(config.Path())
 		return nil
@@ -230,6 +235,10 @@ func printSessions(root string) error {
 	}
 	return nil
 }
+
+// version is stamped at build time with -ldflags "-X main.version=...". A
+// source build leaves it as "dev", which is the honest answer.
+var version = "dev"
 
 // debug enables token accounting on stderr.
 var debug = os.Getenv("RAUNEN_DEBUG") != ""
