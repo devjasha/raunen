@@ -157,8 +157,14 @@ func (m *Model) showProviders(list []providerStatus) {
 	const indent = "            "
 	for _, p := range list {
 		state, note := okStyle.Render(fmt.Sprintf("%d models", p.models)), ""
-		if p.err {
+		switch {
+		case p.err:
 			state = errStyle.Render("unreachable")
+		case p.models == 0:
+			// It answered, so the endpoint is fine — there is just nothing
+			// loaded to talk to, which is a different problem with a different
+			// fix, and green would have implied otherwise.
+			state = askStyle.Render("no models")
 		}
 		if p.needs != "" {
 			note = "needs " + p.needs

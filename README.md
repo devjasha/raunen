@@ -153,6 +153,18 @@ Everything known locally appears at once; the endpoints are probed afterwards
 and fill in as they answer, because a report you have to wait for is a worse
 report.
 
+**`unreachable` means nothing answered at that URL**, not that the software is
+missing. The usual causes are a server that is not running, or one running on a
+different port — `lsof -nP -iTCP -sTCP:LISTEN | grep -i llama` will show where
+it actually is. Point the provider at it:
+
+```json
+"llama": { "base_url": "http://localhost:9931/v1" }
+```
+
+`no models` is a third state, and a different problem: the endpoint answered
+fine, there is just nothing loaded to talk to.
+
 It answers the questions that otherwise need guessing: whether an endpoint is
 actually up, which ones are missing a key, how close the context is to full, and
 what the agent will switch to when it runs out of room — before it does, rather
