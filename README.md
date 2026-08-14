@@ -47,8 +47,16 @@ curl -fsSL https://raw.githubusercontent.com/devjasha/raunen/main/install.sh | s
 
 macOS and Linux, Intel and ARM. Downloads the binary for your platform into
 `~/.local/bin`, verifies it against the release checksums, and tells you if that
-directory is not on your `PATH`. Set `RAUNEN_INSTALL_DIR` to put it elsewhere,
-or `RAUNEN_VERSION=v0.1.0` to pin a version.
+directory is not on your `PATH`.
+
+To change where it goes or pin a version, put the variables on the `sh` side of
+the pipe — in `VAR=x curl ... | sh` they would apply to `curl`, not to the shell
+running the script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/devjasha/raunen/main/install.sh \
+  | RAUNEN_INSTALL_DIR=/usr/local/bin RAUNEN_VERSION=v0.1.0 sh
+```
 
 Piping a script into a shell is worth reading first:
 
