@@ -53,11 +53,21 @@ type Config struct {
 	// Fallback is an escalation ladder of "provider/model" references, tried in
 	// the order given. Put larger contexts later.
 	Fallback []string `json:"fallback"`
+	// Subagents lets the model delegate self-contained work to a sub-agent with
+	// its own context. It costs one more tool schema on every request, so it
+	// can be turned off on a very small window.
+	Subagents *bool `json:"subagents,omitempty"`
 	// Models holds per-model settings, keyed by "provider/model". Anything not
 	// listed falls back to its provider.
 	Models map[string]ModelConfig `json:"models"`
 	// System overrides the built-in system prompt when non-empty.
 	System string `json:"system,omitempty"`
+}
+
+// SubagentsEnabled reports whether delegation is on, defaulting to on when the
+// key is absent so an existing config gains the feature.
+func (c *Config) SubagentsEnabled() bool {
+	return c.Subagents == nil || *c.Subagents
 }
 
 // ContextFor returns the window for a "provider/model" reference: the model's
@@ -111,6 +121,9 @@ func Path() string {
 	return filepath.Join(home, ".config", "raunen", "config.json")
 }
 
+// enabled is addressable so it can be pointed at from the default config.
+var enabled = true
+
 func defaults() *Config {
 	return &Config{
 		// Left empty on purpose: the first run picks whatever the endpoints
@@ -121,6 +134,7 @@ func defaults() *Config {
 		AutoSwitch: false,
 		Fallback:   []string{},
 		Models:     map[string]ModelConfig{},
+		Subagents:  &enabled,
 		Providers: map[string]Provider{
 			// Ollama defaults to a 4096-token context regardless of what the
 			// model supports; raise OLLAMA_CONTEXT_LENGTH and this together.

@@ -53,6 +53,19 @@ func (r *Registry) Add(t Tool) {
 	r.order = append(r.order, t.Name)
 }
 
+// Without returns a copy of the registry with a tool removed. It is what stops
+// a sub-agent from delegating further: the child simply does not have the tool.
+func (r *Registry) Without(name string) *Registry {
+	out := &Registry{}
+	for _, n := range r.order {
+		if n == name {
+			continue
+		}
+		out.Add(r.tools[n])
+	}
+	return out
+}
+
 func (r *Registry) Get(name string) (Tool, bool) {
 	t, ok := r.tools[name]
 	return t, ok

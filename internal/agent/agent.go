@@ -24,9 +24,12 @@ type TextDelta struct{ Text string }
 type ReasoningDelta struct{ Text string }
 
 // ToolStart fires when the model has requested a tool and it is about to run.
+// Depth is zero for the main conversation and one inside a sub-agent, so a
+// frontend can nest the work without knowing how it was produced.
 type ToolStart struct {
-	Name string
-	Args string
+	Name  string
+	Args  string
+	Depth int
 }
 
 // ToolEnd carries the tool's result, or its error.
@@ -34,6 +37,18 @@ type ToolEnd struct {
 	Name   string
 	Result string
 	Err    error
+	Depth  int
+}
+
+// TaskStart fires when the model delegates to a sub-agent.
+type TaskStart struct{ Description string }
+
+// TaskEnd carries what the sub-agent reported back.
+type TaskEnd struct {
+	Description string
+	Summary     string
+	Steps       int
+	Err         error
 }
 
 // TurnEnd fires once the model stops requesting tools.
@@ -71,6 +86,8 @@ func (Usage) event()          {}
 func (Approval) event()       {}
 func (ModeChanged) event()    {}
 func (Trimmed) event()        {}
+func (TaskStart) event()      {}
+func (TaskEnd) event()        {}
 func (TurnEnd) event()        {}
 func (Failed) event()         {}
 
@@ -101,6 +118,12 @@ type Agent struct {
 	// not part of the message list but they are very much part of the prompt:
 	// leaving them out understates a small model's usage by hundreds of tokens.
 	schemaTokens int
+	// out is the current turn's event channel. A turn is single-threaded, so
+	// tools that report progress of their own — the sub-agent tool — can reach
+	// the frontend through it.
+	out chan<- Event
+	// depth is zero for the main conversation and one inside a sub-agent.
+	depth int
 }
 
 func New(c *provider.Client, r *tools.Registry, system string) *Agent {
@@ -283,7 +306,14 @@ func (a *Agent) Restore(msgs []provider.Message) {
 // Cancelling ctx aborts the turn; the partial transcript is retained so the
 // conversation stays coherent.
 func (a *Agent) Run(ctx context.Context, input string, out chan<- Event) {
+	a.run(ctx, input, out, maxSteps)
+}
+
+// run is Run with an explicit step budget, so a sub-agent can be held to a
+// tighter one than the conversation that spawned it.
+func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps int) {
 	defer close(out)
+	a.out = out
 
 	a.messages = append(a.messages, provider.Message{Role: provider.User, Content: input})
 	schemas := a.tools.Schemas()
@@ -291,7 +321,7 @@ func (a *Agent) Run(ctx context.Context, input string, out chan<- Event) {
 	// deserve the expensive model just because an earlier one needed it.
 	a.rung = 0
 
-	for step := 0; step < maxSteps; step++ {
+	for step := 0; step < steps; step++ {
 		a.trim(out)
 
 		// Move up the ladder before sending, when what cannot be trimmed away
@@ -355,7 +385,7 @@ func (a *Agent) Run(ctx context.Context, input string, out chan<- Event) {
 			}
 		}
 	}
-	out <- Failed{Err: fmt.Errorf("gave up after %d steps", maxSteps)}
+	out <- Failed{Err: fmt.Errorf("gave up after %d steps", steps)}
 }
 
 func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- Event) (string, error) {
@@ -365,12 +395,12 @@ func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- E
 		args = "{}"
 	}
 
-	out <- ToolStart{Name: name, Args: args}
+	out <- ToolStart{Name: name, Args: args, Depth: a.depth}
 
 	t, ok := a.tools.Get(name)
 	if !ok {
 		err := fmt.Errorf("no such tool: %s", name)
-		out <- ToolEnd{Name: name, Err: err}
+		out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
 		return err.Error(), err
 	}
 
@@ -378,7 +408,7 @@ func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- E
 	// tool result so the model can retry with valid arguments.
 	if !json.Valid([]byte(args)) {
 		err := fmt.Errorf("arguments were not valid JSON")
-		out <- ToolEnd{Name: name, Err: err}
+		out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
 		return err.Error(), err
 	}
 
@@ -388,13 +418,13 @@ func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- E
 		switch a.mode {
 		case ModePlan:
 			err := fmt.Errorf("refused: %s changes state and the agent is in plan mode", name)
-			out <- ToolEnd{Name: name, Err: err}
+			out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
 			// Returned as a tool result so the model adapts instead of stalling.
 			return "refused: plan mode is read-only. Propose the change instead of making it.", err
 		case ModeAccept:
 			if !a.approve(ctx, tc, out) {
 				err := fmt.Errorf("declined by user")
-				out <- ToolEnd{Name: name, Err: err}
+				out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
 				return "the user declined this change. Ask what to do differently.", err
 			}
 		}
@@ -402,7 +432,7 @@ func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- E
 
 	result, err := t.Run(ctx, json.RawMessage(args))
 	if err != nil {
-		out <- ToolEnd{Name: name, Err: err}
+		out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
 		return "error: " + err.Error(), err
 	}
 	out <- ToolEnd{Name: name, Result: result}

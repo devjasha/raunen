@@ -62,6 +62,7 @@ var (
 	thinkStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
 	askStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
 	barStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
+	taskStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 
 	// The border tracks state: quiet when idle, warm while the model works.
 	borderIdle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -687,15 +688,40 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.think = ""
 		m.flush()
 		m.inText = false
+		pad := strings.Repeat("  ", 1+e.Depth)
 		m.push(entry{
-			first: "  " + toolStyle.Render("⏺ "),
-			cont:  "      ",
+			first: pad + toolStyle.Render("⏺ "),
+			cont:  pad + "    ",
 			text:  toolStyle.Render(e.Name) + dimStyle.Render("  "+summarize(e.Args, max(20, m.innerWidth()-len(e.Name)-10))),
 		})
 		return *m, next
 
 	case agent.ToolEnd:
 		text, style := resultSummary(e.Result), dimStyle
+		if e.Err != nil {
+			text, style = e.Err.Error(), errStyle
+		}
+		pad := strings.Repeat("  ", 2+e.Depth)
+		m.push(entry{
+			first: pad + dimStyle.Render("↳ "),
+			cont:  pad + "  ",
+			text:  style.Render(text),
+		})
+		return *m, next
+
+	case agent.TaskStart:
+		m.think = ""
+		m.flush()
+		m.inText = false
+		m.push(entry{
+			first: "  " + taskStyle.Render("◆ "),
+			cont:  "    ",
+			text:  taskStyle.Render("task") + dimStyle.Render("  "+e.Description),
+		})
+		return *m, next
+
+	case agent.TaskEnd:
+		text, style := fmt.Sprintf("returned %d chars after %d steps", len(e.Summary), e.Steps), dimStyle
 		if e.Err != nil {
 			text, style = e.Err.Error(), errStyle
 		}

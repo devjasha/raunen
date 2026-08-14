@@ -87,6 +87,9 @@ func run() error {
 	ag.SetRef(ref)
 	ag.SetAutoSwitch(cfg.AutoSwitch)
 	ag.SetFallbacks(fallbacks(cfg))
+	if cfg.SubagentsEnabled() {
+		ag.EnableSubagents()
+	}
 
 	sess, err := openSession(*resume, *continued, root, ref)
 	if err != nil {

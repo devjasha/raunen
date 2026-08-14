@@ -78,6 +78,7 @@ raunen -config                      # print the config path
 | `/sessions` | list saved sessions |
 | `/resume <id>` | pick up a saved session |
 | `/clear` | start a new session, keeping the old one |
+| `task` (tool) | the model delegates to a sub-agent |
 | `/help` | show this |
 | `/quit` | exit |
 
@@ -251,6 +252,51 @@ room. Ordering is treated as intent rather than second-guessed.
 Each turn starts at the bottom of the ladder again, so a short question does not
 inherit the expensive model just because an earlier one needed it. Escalation
 never goes back down within a conversation.
+
+## Sub-agents
+
+The model can delegate a self-contained piece of investigation with the `task`
+tool. The sub-agent gets its own empty context, does the work, and returns only
+its final answer:
+
+```
+  ◆ task  find where the read tool is defined
+      ⏺ bash  grep -rn "read" internal/tools
+        ↳ 12 lines
+      ⏺ read  internal/tools/tools.go
+        ↳ 300 lines
+    ↳ returned 180 chars after 3 steps
+
+  The read tool is defined in internal/tools/tools.go and returns the file
+  with line numbers.
+```
+
+**This is a context technique, not a concurrency one.** Nothing runs in
+parallel: a local model serves one request at a time — two concurrent requests
+to the same Ollama measured *slower* than two sequential ones — so parallelism
+would buy nothing on a local setup.
+
+What it buys is room. Measured on the run above:
+
+| | prompt tokens |
+|---|---|
+| parent before delegating | 916 |
+| sub-agent, internally | 4,115 |
+| parent after it returned | 1,356 |
+
+The sub-agent spent 4,115 tokens reading files; the parent grew by 440. On an
+8k window that is the difference between answering the question and running out
+of context halfway through it.
+
+The costs are real too: the work still happens, so it takes just as long, and
+the extra tool schema is charged on every request. Turn it off with
+`"subagents": false` if you are working with a very small window.
+
+A sub-agent **inherits the caller's mode**, so plan mode still refuses writes
+and accept mode still prompts — approvals surface in the same place, and
+delegation cannot launder a write past a refusal. It **cannot delegate further**:
+the child is built without the `task` tool, so recursion is impossible by
+construction rather than by a depth counter.
 
 ## Tool output cleaning
 
