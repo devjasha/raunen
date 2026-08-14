@@ -271,6 +271,30 @@ its final answer:
   with line numbers.
 ```
 
+Sub-agents work in their own panel above the input, so their steps never flood
+the transcript:
+
+```
+  ╭──────────────────────────────────────────────────────────╮
+  │ ◆ ⠇ working on  Summarize vcs.go and subview.go          │
+  │ ⏺ read  internal/vcs/vcs.go                              │
+  │   ↳ 38 lines                                             │
+  │ ⏺ read  internal/ui/subview.go                           │
+  │   ↳ 70 lines                                             │
+  ╰──────────────────────────────────────────────────────────╯
+  ⠇ working  ⏎ 1 queued  ·  esc to cancel
+```
+
+The panel opens when a sub-agent starts, follows it live, and collapses when it
+finishes, leaving one line in the transcript. What a sub-agent did is
+working-out, not conversation.
+
+**You can keep typing while it runs.** Press enter and the message is held and
+sent the moment the turn ends — the status row shows `⏎ 1 queued`. It cannot be
+delivered sooner: the model is mid-turn, blocked on a tool result it asked for,
+and cannot accept new input until that returns. Queueing is the honest version
+of carrying on while it works.
+
 **This is a context technique, not a concurrency one.** Nothing runs in
 parallel: a local model serves one request at a time — two concurrent requests
 to the same Ollama measured *slower* than two sequential ones — so parallelism

@@ -169,6 +169,12 @@ type Model struct {
 	warnedFull bool
 	// sess is the conversation on disk, written after each turn.
 	sess *session.Session
+	// sub is the panel a running sub-agent works in, nil when none is running.
+	sub *subView
+	// queued is a message typed while the agent was busy. The model cannot take
+	// it mid-turn — it is blocked on a tool result it asked for — so it is held
+	// and sent the moment the turn ends.
+	queued string
 	// pick is the model chooser overlay, open only while choosing.
 	pick *picker
 	// ask is a tool call waiting on the user in accept mode. While it is set
@@ -407,6 +413,9 @@ func (m Model) viewHeight() int {
 	if m.pick != nil {
 		h -= m.pick.height()
 	}
+	if m.sub != nil {
+		h -= m.sub.height()
+	}
 	return max(1, h)
 }
 
@@ -450,7 +459,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.cancel = nil
 		m.events = nil
+		// A sub-agent cannot outlive the turn that spawned it, so the panel
+		// closes here even if the turn ended badly.
+		m.sub = nil
 		m.input.Focus()
+		if q := m.queued; q != "" {
+			m.queued = ""
+			return m.send(q)
+		}
 		return m, textarea.Blink
 	}
 
@@ -552,6 +568,13 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		if m.busy {
+			// The model is mid-turn, blocked on a tool result it asked for, so
+			// it cannot take this now. Hold it and send it the moment the turn
+			// ends, rather than dropping the keystroke on the floor.
+			if q := strings.TrimSpace(m.input.Value()); q != "" {
+				m.queued = q
+				m.input.Reset()
+			}
 			return *m, nil
 		}
 		text := strings.TrimSpace(m.input.Value())
@@ -685,6 +708,16 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.ToolStart:
+		// Delegation announces itself through TaskStart, which opens the panel.
+		// Reporting the call as an ordinary tool as well says it twice.
+		if e.Name == "task" && e.Depth == 0 {
+			return *m, next
+		}
+		if e.Depth > 0 && m.sub != nil {
+			m.sub.add(toolStyle.Render("⏺ "+e.Name) +
+				dimStyle.Render("  "+summarize(e.Args, max(10, m.innerWidth()-len(e.Name)-14))))
+			return *m, next
+		}
 		m.think = ""
 		m.flush()
 		m.inText = false
@@ -697,9 +730,17 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.ToolEnd:
+		// Likewise: TaskEnd reports what came back.
+		if e.Name == "task" && e.Depth == 0 {
+			return *m, next
+		}
 		text, style := resultSummary(e.Result), dimStyle
 		if e.Err != nil {
 			text, style = e.Err.Error(), errStyle
+		}
+		if e.Depth > 0 && m.sub != nil {
+			m.sub.add("  " + dimStyle.Render("↳ ") + style.Render(text))
+			return *m, next
 		}
 		pad := strings.Repeat("  ", 2+e.Depth)
 		m.push(entry{
@@ -713,6 +754,8 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.think = ""
 		m.flush()
 		m.inText = false
+		// The panel opens here and takes the sub-agent's steps from now on.
+		m.sub = &subView{desc: e.Description}
 		m.push(entry{
 			first: "  " + taskStyle.Render("◆ "),
 			cont:  "    ",
@@ -721,6 +764,9 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.TaskEnd:
+		// The panel collapses, leaving one line in the transcript. What the
+		// sub-agent did was working-out, not conversation.
+		m.sub = nil
 		text, style := fmt.Sprintf("returned %d chars after %d steps", len(e.Summary), e.Steps), dimStyle
 		if e.Err != nil {
 			text, style = e.Err.Error(), errStyle
@@ -953,6 +999,10 @@ func (m Model) View() tea.View {
 
 	rows := make([]string, 0, m.height)
 	rows = append(rows, m.transcript()...)
+	if m.sub != nil {
+		f := spinnerFrames[m.frame%len(spinnerFrames)]
+		rows = append(rows, strings.Split(m.sub.render(m.innerWidth(), f), "\n")...)
+	}
 	if m.pick != nil {
 		rows = append(rows, strings.Split(m.pick.render(m.innerWidth(), m.ref), "\n")...)
 	}
@@ -973,9 +1023,15 @@ func (m Model) View() tea.View {
 		if m.think != "" {
 			s = "thinking"
 		}
+		tail := "  esc to cancel"
+		if m.queued != "" {
+			tail = "  ⏎ 1 queued  ·  esc to cancel"
+		}
 		status = spinStyle.Render(f) + " " +
-			dimStyle.Render(ansi.Truncate(s, max(10, m.innerWidth()-18), "…")) +
-			dimStyle.Render("  esc to cancel")
+			dimStyle.Render(ansi.Truncate(s, max(10, m.innerWidth()-len(tail)-6), "…")) +
+			dimStyle.Render(tail)
+	} else if m.queued != "" {
+		status = dimStyle.Render("⏎ queued: " + ansi.Truncate(m.queued, max(10, m.innerWidth()-24), "…"))
 	} else if m.scroll > 0 {
 		unit := "lines"
 		if m.scroll == 1 {
@@ -1002,6 +1058,9 @@ func (m Model) View() tea.View {
 	// transcript, the status row, the bar and the border.
 	if cur := m.input.Cursor(); cur != nil {
 		below := m.viewHeight() + 3
+		if m.sub != nil {
+			below += m.sub.height()
+		}
 		if m.pick != nil {
 			below += m.pick.height()
 		}
@@ -1196,7 +1255,7 @@ func summarize(args string, limit int) string {
 		return ansi.Truncate(strings.Join(strings.Fields(args), " "), limit, "…")
 	}
 	// Prefer the argument that identifies what is being acted on.
-	for _, k := range []string{"command", "path", "pattern"} {
+	for _, k := range []string{"command", "path", "pattern", "description"} {
 		if v, ok := m[k]; ok {
 			return ansi.Truncate(fmt.Sprintf("%v", v), limit, "…")
 		}
