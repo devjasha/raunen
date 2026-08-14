@@ -36,7 +36,7 @@ commands, and keeps the conversation where you can see it.
   ╭────────────────────────────────────────────────────────────╮
   │ ›                                                          │
   ╰────────────────────────────────────────────────────────────╯
-  auto · ⎇ main · qwen3.5-8k:latest        ██░░░░░░░░ 22% · 1.8k
+  auto · ⎇ main · qwen3.5-8k:latest · ██░░░░░░░░ 22% · 1.8k
 ```
 
 ## Install
@@ -286,7 +286,7 @@ the transcript:
   ╭──────────────────────────────────────────────────────────╮
   │ ›                                                        │
   ╰──────────────────────────────────────────────────────────╯
-  auto · ⎇ main · qwen3.5-8k:latest      ██░░░░░░░░ 22% · 1.8k
+  auto · ⎇ main · qwen3.5-8k:latest · ██░░░░░░░░ 22% · 1.8k
 ```
 
 The panel opens when a sub-agent starts, follows it live, and collapses when it

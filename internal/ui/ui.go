@@ -1129,25 +1129,24 @@ func (m Model) box() string {
 		Render(m.input.View())
 }
 
-// bar renders the status line above the input: where you are on the left, how
-// full the context is on the right.
+// bar renders the reference line under the input: mode, where you are, what
+// you are talking to, and how full its context is — all on the left, reading
+// as one sequence rather than split across the width.
 func (m Model) bar() string {
-	left := modeStyle(m.ag.Mode()).Render(m.ag.Mode().String()) + dimStyle.Render(" · ")
+	sep := dimStyle.Render(" · ")
+
+	parts := []string{modeStyle(m.ag.Mode()).Render(m.ag.Mode().String())}
 	if m.branch != "" {
-		left += branchStyle.Render("⎇ "+m.branch) + dimStyle.Render(" · ")
+		parts = append(parts, branchStyle.Render("⎇ "+m.branch))
 	}
-	left += modelStyle.Render(m.ag.Model())
-
-	right := m.usage()
-
-	gap := m.innerWidth() - ansi.StringWidth(left) - ansi.StringWidth(right)
-	if gap < 1 {
-		// Too narrow for both: the context figure is the more perishable of
-		// the two, so keep it and trim the left.
-		left = ansi.Truncate(left, max(0, m.innerWidth()-ansi.StringWidth(right)-1), "…")
-		gap = max(1, m.innerWidth()-ansi.StringWidth(left)-ansi.StringWidth(right))
+	parts = append(parts, modelStyle.Render(m.ag.Model()))
+	if u := m.usage(); u != "" {
+		parts = append(parts, u)
 	}
-	return left + strings.Repeat(" ", gap) + right
+
+	// Trimmed from the right, so the mode — the thing that changes what a
+	// keystroke does — is the last to go.
+	return ansi.Truncate(strings.Join(parts, sep), m.innerWidth(), "…")
 }
 
 // usage describes context consumption. With a declared context window it is a
