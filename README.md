@@ -252,6 +252,39 @@ Each turn starts at the bottom of the ladder again, so a short question does not
 inherit the expensive model just because an earlier one needed it. Escalation
 never goes back down within a conversation.
 
+## Tool output cleaning
+
+Command output is written for a terminal, not for a model. Before a result is
+charged to the context it is stripped of colour codes, progress bars redrawn
+over themselves, runs of blank lines, and repeated identical lines (replaced
+with one line and a count). This happens *before* truncation, so a given budget
+holds more of what matters and the useful end of a long log is likelier to
+survive.
+
+Everything here preserves meaning. Nothing rewrites words, reorders lines or
+summarises — a tool result is evidence, and a model reasoning about paraphrased
+evidence is worse off than one reasoning about less of it.
+
+**Measured savings, on output from this repository:**
+
+| payload | raw | cleaned | saved |
+|---|---|---|---|
+| `go build -x` | 108,748 | 108,747 | 0.0% |
+| `git log --oneline -30` | 171 | 170 | 0.6% |
+| `ls -laR internal` | 2,697 | 2,696 | 0.0% |
+| a Go source file | 34,332 | 34,331 | 0.0% |
+| ANSI + progress + duplicates | 56 | 21 | 62.5% |
+
+Close to nothing on ordinary output, and a lot on noisy output. The reason is
+worth knowing: commands here run through `exec` without a terminal attached, so
+most tools disable colour and progress bars on their own. There is usually
+nothing left to strip. The cleaning earns its place on the cases that do produce
+noise — anything forcing `--color=always`, progress that ignores the lack of a
+TTY, or logs that repeat themselves — and costs a single pass otherwise.
+
+If you have seen claims of 60–90% savings from this kind of filtering, that is
+the noisy column. It is real, and it does not describe typical output.
+
 ## Working with local models
 
 Everything here came out of running this against Ollama. Most of it will bite

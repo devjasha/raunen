@@ -112,8 +112,12 @@ func OutputBudget(contextTokens int) int {
 func Default(root string, maxOutput int) *Registry {
 	r := &Registry{}
 
-	// truncate keeps a single result from crowding out the conversation.
+	// truncate cleans a result, then keeps it from crowding out the
+	// conversation. Cleaning comes first so the budget is spent on content
+	// rather than on colour codes and progress bars, which also means the
+	// useful end of a long log is likelier to survive.
 	truncate := func(s string) string {
+		s = Clean(s)
 		if len(s) <= maxOutput {
 			return s
 		}
