@@ -73,6 +73,69 @@ go build -o ~/.local/bin/raunen .
 Nothing is needed at runtime either way — one static binary, about 3 MB
 compressed.
 
+## Getting started
+
+**1. Have a model to talk to.** Anything speaking the OpenAI API will do. With
+[Ollama](https://ollama.com):
+
+```sh
+ollama pull qwen3.5          # or any model you like
+```
+
+**2. Run it in the directory you want to work in.** Tools are rooted there, so
+`raunen` in a project is what gives it something to read.
+
+```sh
+cd ~/Projects/my-thing
+raunen
+```
+
+The first run writes `~/.config/raunen/config.json` and, since no model is
+configured yet, asks your endpoints what they have and picks one:
+
+```
+raunen: no default model set, using ollama/qwen3.5:latest
+```
+
+**3. Ask it something.** It reads and writes files and runs commands in that
+directory, showing each step as it goes:
+
+```
+  ──────────────────────────────────────────────────────── 10:42
+  ▌ what does main.go do?
+
+    ⏺ read  main.go
+      ↳ 84 lines
+
+  It parses flags, loads the config, and starts either the TUI or a
+  single one-shot turn.
+```
+
+**4. Decide how much rope it gets.** `tab` cycles the mode, shown bottom-left.
+Start in `plan` if you would rather it proposed than acted:
+
+```
+plan · ⎇ main · qwen3.5:latest · █░░░░░░░░░ 11% · 925
+```
+
+**5. Watch the context bar.** Local models run out of room faster than you would
+expect, and that is the most common cause of a bad answer. When it turns amber,
+`/clear` starts fresh. See [working with local models](#working-with-local-models)
+for how to give it more room — it matters more than anything else here.
+
+`/help` lists everything; `ctrl+c` leaves. The conversation is saved, so
+`raunen --continue` picks it back up tomorrow.
+
+### Where the dashboard is
+
+There is no separate dashboard or web UI: raunen is the interface, and a running
+agent has nowhere else to put things. The equivalents are in the TUI itself —
+`/model` lists every model your endpoints serve, `/providers` the endpoints
+themselves, `/sessions` your history, and the bar under the input carries mode,
+branch, model and context at all times. From outside, `raunen --running` shows
+live instances and `RAUNEN_DEBUG=1` prints per-request token accounting and the
+resolved model ladder on stderr.
+
 ## Use
 
 ```sh
