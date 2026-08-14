@@ -452,6 +452,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventMsg:
 		return m.onEvent(msg.ev)
 
+	case statusMsg:
+		m.showProviders(msg.providers)
+		return m, nil
+
 	case modelsMsg:
 		if m.pick != nil {
 			m.pick.err = msg.err
@@ -959,6 +963,10 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		}
 		return m.switchModel(fields[1])
 
+	case "/status":
+		m.status()
+		return *m, probeProviders(m.cfg)
+
 	case "/providers":
 		for name, p := range m.cfg.Providers {
 			m.add(dimStyle.Render(fmt.Sprintf("  %-12s %s", name, p.BaseURL)))
@@ -969,6 +977,7 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		for _, l := range []string{
 			"  /model                   choose a model from a list",
 			"  /model <provider/model>  switch directly",
+			"  /status                  model, context, ladder, endpoints",
 			"  /providers               list configured endpoints",
 			"  /clear                   start a new session",
 			"  /sessions                list saved sessions",

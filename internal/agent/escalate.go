@@ -21,6 +21,10 @@ type Switched struct {
 
 func (Switched) event() {}
 
+// Ladder reports the escalation ladder, for showing what will happen when this
+// model runs out of room.
+func (a *Agent) Ladder() []Candidate { return a.fallbacks }
+
 // SetFallbacks installs the escalation ladder. It is tried in order, so larger
 // contexts belong later in the list.
 func (a *Agent) SetFallbacks(c []Candidate) { a.fallbacks = c }

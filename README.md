@@ -126,15 +126,43 @@ for how to give it more room — it matters more than anything else here.
 `/help` lists everything; `ctrl+c` leaves. The conversation is saved, so
 `raunen --continue` picks it back up tomorrow.
 
-### Where the dashboard is
+### Checking on things
 
-There is no separate dashboard or web UI: raunen is the interface, and a running
-agent has nowhere else to put things. The equivalents are in the TUI itself —
-`/model` lists every model your endpoints serve, `/providers` the endpoints
-themselves, `/sessions` your history, and the bar under the input carries mode,
-branch, model and context at all times. From outside, `raunen --running` shows
+`/status` is the dashboard, printed into the conversation rather than opened in
+a browser:
+
+```
+─────────────────────────────────────────────────────────── status
+  version   v0.1.0
+  model     ollama/qwen3.5-8k:latest  ·  8192 tokens
+  mode      auto
+  context   940 of 8.2k  (11%)
+  session   20260814-172209-2ee0  ·  1 turn  ·  ⎇ main
+  cwd       ~/Projects/raunen
+  ladder    18 models
+            1. openrouter/nvidia/nemotron-3.5-lightning:free  ·  1000000
+            2. openrouter/poolside/laguna-s-2.1:free  ·  262144
+            … and 16 more
+  subagents on
+  providers ollama        3 models     http://localhost:11434/v1
+            lmstudio      unreachable  http://localhost:1234/v1
+            openrouter    411 models   needs OPENROUTER_API_KEY
+```
+
+Everything known locally appears at once; the endpoints are probed afterwards
+and fill in as they answer, because a report you have to wait for is a worse
+report.
+
+It answers the questions that otherwise need guessing: whether an endpoint is
+actually up, which ones are missing a key, how close the context is to full, and
+what the agent will switch to when it runs out of room — before it does, rather
+than after.
+
+There is no separate window or web UI. raunen is the interface, and a running
+agent has nowhere else to put things. `/model`, `/providers` and `/sessions`
+cover the same ground in more detail; from outside, `raunen --running` lists
 live instances and `RAUNEN_DEBUG=1` prints per-request token accounting and the
-resolved model ladder on stderr.
+resolved ladder on stderr.
 
 ## Use
 
@@ -164,6 +192,7 @@ raunen -version                     # print the version
 |---|---|
 | `/model` | choose a model from a list |
 | `/model <provider/model>` | switch directly |
+| `/status` | model, context, ladder and endpoints on one screen |
 | `/providers` | list configured endpoints |
 | `/sessions` | list saved sessions |
 | `/resume <id>` | pick up a saved session |

@@ -130,6 +130,7 @@ func run() error {
 	// The alternate screen is handed back on exit and the terminal is left as
 	// it was found. The conversation is not replayed into it — sessions are
 	// saved to disk instead, and resumed with --continue or /resume.
+	ui.Version = version
 	_, err = tea.NewProgram(ui.New(cfg, ag, root, ref, sess)).Run()
 	return err
 }
