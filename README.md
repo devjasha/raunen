@@ -163,8 +163,8 @@ same wire format. Models are `provider/model`, split on the first `/` so Ollama
 names containing slashes (`hf.co/user/repo`) still work.
 
 `context` is optional and declares the model's window in tokens. It drives the
-usage bar and the history trimming below; without it you get a plain token
-count. There is no way to ask an OpenAI-compatible endpoint how big its context
+usage bar, the history trimming below, and automatic switching; without it you
+get a plain token count. There is no way to ask an OpenAI-compatible endpoint how big its context
 is, so it has to be declared.
 
 `/model` with no argument lists what the endpoints actually serve, fetched over
@@ -173,6 +173,45 @@ config.
 
 Anthropic and Gemini are the notable formats *not* covered; they would need a
 real adapter behind the same `provider.Client` interface.
+
+## Switching models automatically
+
+Off by default. Turn it on with a ladder of models, largest last:
+
+```json
+{
+  "auto_switch": true,
+  "fallback": [
+    "ollama/qwen3.5-16k:latest",
+    "openrouter/anthropic/claude-sonnet-4"
+  ]
+}
+```
+
+When the conversation outgrows the current model, raunen moves up the ladder and
+carries on instead of failing:
+
+```
+  ⇅ switched to ollama/qwen3.5-16k:latest
+    — the question and its results need 1612 tokens of a 2048-token window
+```
+
+It escalates on two triggers. **Before a request**, when what trimming is not
+allowed to drop — the system prompt, the tool schemas, the question being
+answered and its results — already fills 70% of the window. Trimming cannot
+help there, so the model would be cut off mid-answer. **After a request** that
+came back with `finish_reason: "length"` and no content, in which case the same
+request is retried on the roomier model. Nothing had been emitted, so the retry
+cannot leave a seam in the reply.
+
+A rung whose declared context is no larger than the current one is skipped —
+moving sideways hits the same ceiling. A rung with no declared context is used
+anyway: you put it in the ladder on purpose, and hosted models usually have
+room. Ordering is treated as intent rather than second-guessed.
+
+Each turn starts at the bottom of the ladder again, so a short question does not
+inherit the expensive model just because an earlier one needed it. Escalation
+never goes back down within a conversation.
 
 ## Working with local models
 

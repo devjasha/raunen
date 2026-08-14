@@ -90,6 +90,17 @@ type Agent struct {
 	mode     Mode
 	// contextTokens is the model's window, zero when it was not declared.
 	contextTokens int
+	// ref is the active "provider/model", tracked so escalation can report
+	// what it moved away from.
+	ref string
+	// fallbacks is the escalation ladder; rung is how far up it we are.
+	fallbacks  []Candidate
+	rung       int
+	autoSwitch bool
+	// schemaTokens is what the tool definitions cost on every request. They are
+	// not part of the message list but they are very much part of the prompt:
+	// leaving them out understates a small model's usage by hundreds of tokens.
+	schemaTokens int
 }
 
 func New(c *provider.Client, r *tools.Registry, system string) *Agent {
@@ -104,9 +115,37 @@ func New(c *provider.Client, r *tools.Registry, system string) *Agent {
 	}
 }
 
+// SetRef records which "provider/model" is in use.
+func (a *Agent) SetRef(ref string) { a.ref = ref }
+
+// Ref reports the active "provider/model".
+func (a *Agent) Ref() string { return a.ref }
+
+// Context reports the active model's declared window, zero when unknown.
+func (a *Agent) Context() int { return a.contextTokens }
+
+// SetAutoSwitch enables escalation up the fallback ladder.
+func (a *Agent) SetAutoSwitch(on bool) { a.autoSwitch = on }
+
 // SetContext tells the agent how large the model's context window is, so it can
 // keep requests inside it. Zero disables trimming.
 func (a *Agent) SetContext(tokens int) { a.contextTokens = tokens }
+
+// overhead is what every request costs before any messages: the tool schemas,
+// measured once.
+func (a *Agent) overhead() int {
+	if a.tools == nil {
+		return 0
+	}
+	if a.schemaTokens == 0 {
+		b, err := json.Marshal(a.tools.Schemas())
+		if err != nil {
+			return 0
+		}
+		a.schemaTokens = len(b) / 4
+	}
+	return a.schemaTokens
+}
 
 // estimateTokens approximates the size of a request. Roughly four characters
 // per token is close enough to decide what to drop, and it avoids depending on
@@ -143,7 +182,7 @@ func (a *Agent) trim(out chan<- Event) {
 		return
 	}
 	// Leave room for the reply as well as the prompt.
-	budget := a.contextTokens * 6 / 10
+	budget := a.contextTokens*6/10 - a.overhead()
 	if estimateTokens(a.messages) <= budget {
 		return
 	}
@@ -248,9 +287,18 @@ func (a *Agent) Run(ctx context.Context, input string, out chan<- Event) {
 
 	a.messages = append(a.messages, provider.Message{Role: provider.User, Content: input})
 	schemas := a.tools.Schemas()
+	// Each turn starts at the bottom of the ladder: a short question does not
+	// deserve the expensive model just because an earlier one needed it.
+	a.rung = 0
 
 	for step := 0; step < maxSteps; step++ {
 		a.trim(out)
+
+		// Move up the ladder before sending, when what cannot be trimmed away
+		// already fills most of the window.
+		if reason, tight := a.needsMoreRoom(); tight {
+			a.escalate(reason, out)
+		}
 
 		msg, usage, err := a.client.Stream(ctx, a.messages, schemas, provider.Handler{
 			Text:      func(s string) { out <- TextDelta{Text: s} },
@@ -273,6 +321,13 @@ func (a *Agent) Run(ctx context.Context, input string, out chan<- Event) {
 			// nothing is produced at all — which looks like an empty reply
 			// rather than the window being too small.
 			if msg.Finish == "length" && strings.TrimSpace(msg.Content) == "" {
+				// Cut off before writing anything. Retrying the same request on
+				// a roomier model is exactly the case escalation exists for, and
+				// nothing was emitted, so the retry cannot produce a seam.
+				if a.escalate(fmt.Sprintf("cut off after %d tokens of prompt", usage.Prompt), out) {
+					a.messages = a.messages[:len(a.messages)-1]
+					continue
+				}
 				out <- Failed{Err: fmt.Errorf(
 					"ran out of context before answering (%d tokens of prompt). "+
 						"Use /clear, or give the model a larger context", usage.Prompt)}

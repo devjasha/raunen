@@ -577,6 +577,7 @@ func (m *Model) switchModel(ref string) (tea.Model, tea.Cmd) {
 	}
 	m.ag.SetClient(provider.New(p.BaseURL, p.Key(), model))
 	m.ag.SetContext(p.Context)
+	m.ag.SetRef(ref)
 	m.ref = ref
 	m.add(okStyle.Render("✓ switched to " + ref))
 	return *m, nil
@@ -725,6 +726,17 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.ModeChanged:
+		return *m, next
+
+	case agent.Switched:
+		m.ref = e.To
+		m.warnedFull = false
+		m.push(entry{
+			first: "  " + okStyle.Render("⇅ "),
+			cont:  "    ",
+			text: okStyle.Render("switched to "+e.To) +
+				dimStyle.Render("  — "+e.Reason),
+		})
 		return *m, next
 
 	case agent.Trimmed:
@@ -1056,6 +1068,7 @@ func (m Model) usage() string {
 	}
 	limit := m.contextLimit()
 	if limit <= 0 {
+		// No declared window: a raw count is honest, a percentage would not be.
 		return dimStyle.Render(humanTokens(m.ctxTokens) + " tokens")
 	}
 
@@ -1069,14 +1082,10 @@ func (m Model) usage() string {
 		dimStyle.Render(" · "+humanTokens(m.ctxTokens))
 }
 
-// contextLimit is the configured context window for the active model, or zero
-// when it was not declared.
-func (m Model) contextLimit() int {
-	if p, _, err := m.cfg.Resolve(m.ref); err == nil {
-		return p.Context
-	}
-	return 0
-}
+// contextLimit is the window of whatever model is in use right now. It is read
+// from the agent rather than the config, since escalation can change the model
+// mid-conversation.
+func (m Model) contextLimit() int { return m.ag.Context() }
 
 // contextNearlyFull reports whether the conversation is close enough to the
 // window that the server will start dropping the oldest messages — which means

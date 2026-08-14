@@ -39,6 +39,12 @@ type Config struct {
 	// Default is a "provider/model" reference, e.g. "ollama/qwen3-coder".
 	Default   string              `json:"default"`
 	Providers map[string]Provider `json:"providers"`
+	// AutoSwitch turns on escalation: when the conversation outgrows the
+	// current model, move to the next entry in Fallback rather than failing.
+	AutoSwitch bool `json:"auto_switch"`
+	// Fallback is an escalation ladder of "provider/model" references, tried in
+	// the order given. Put larger contexts later.
+	Fallback []string `json:"fallback"`
 	// System overrides the built-in system prompt when non-empty.
 	System string `json:"system,omitempty"`
 }
@@ -83,6 +89,10 @@ func Path() string {
 func defaults() *Config {
 	return &Config{
 		Default: "ollama/qwen3.5:latest",
+		// Off by default, and listed so the knobs are visible in the file that
+		// gets written on first run.
+		AutoSwitch: false,
+		Fallback:   []string{},
 		Providers: map[string]Provider{
 			// Ollama defaults to a 4096-token context regardless of what the
 			// model supports; raise OLLAMA_CONTEXT_LENGTH and this together.

@@ -74,6 +74,9 @@ func run() error {
 	reg := tools.Default(root, tools.OutputBudget(p.Context))
 	ag := agent.New(provider.New(p.BaseURL, p.Key(), model), reg, cfg.System)
 	ag.SetContext(p.Context)
+	ag.SetRef(ref)
+	ag.SetAutoSwitch(cfg.AutoSwitch)
+	ag.SetFallbacks(fallbacks(cfg))
 
 	sess, err := openSession(*resume, *continued, root, ref)
 	if err != nil {
@@ -97,6 +100,25 @@ func run() error {
 	// saved to disk instead, and resumed with --continue or /resume.
 	_, err = tea.NewProgram(ui.New(cfg, ag, root, ref, sess)).Run()
 	return err
+}
+
+// fallbacks resolves the escalation ladder, skipping entries that do not
+// resolve so one bad reference cannot break startup.
+func fallbacks(cfg *config.Config) []agent.Candidate {
+	out := make([]agent.Candidate, 0, len(cfg.Fallback))
+	for _, ref := range cfg.Fallback {
+		p, model, err := cfg.Resolve(ref)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "raunen: ignoring fallback:", err)
+			continue
+		}
+		out = append(out, agent.Candidate{
+			Ref:     ref,
+			Client:  provider.New(p.BaseURL, p.Key(), model),
+			Context: p.Context,
+		})
+	}
+	return out
 }
 
 // openSession picks up a saved conversation when asked, and otherwise starts a
@@ -192,6 +214,8 @@ func oneShot(ag *agent.Agent, prompt string) error {
 				fmt.Fprintf(os.Stderr, dim("\n[usage] prompt=%d completion=%d total=%d\n"),
 					e.Prompt, e.Completion, e.Total)
 			}
+		case agent.Switched:
+			fmt.Fprintf(os.Stderr, dim("[switched to %s — %s]\n"), e.To, e.Reason)
 		case agent.Trimmed:
 			fmt.Fprintf(os.Stderr, dim("[dropped %d earlier messages to fit the context]\n"), e.Messages)
 		case agent.ToolStart:
