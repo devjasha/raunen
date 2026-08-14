@@ -145,31 +145,64 @@ running, so it shows `ollama` or `git` rather than `raunen`.
 
 ```json
 {
-  "default": "ollama/qwen3.5:latest",
+  "default": "",
   "providers": {
-    "ollama":   { "base_url": "http://localhost:11434/v1", "context": 4096 },
-    "lmstudio": { "base_url": "http://localhost:1234/v1" },
-    "llamacpp": { "base_url": "http://localhost:8080/v1" },
-    "openrouter": {
-      "base_url": "https://openrouter.ai/api/v1",
-      "api_key_env": "OPENROUTER_API_KEY"
-    }
-  }
+    "ollama":       { "base_url": "http://localhost:11434/v1", "context": 4096 },
+    "ollama-cloud": { "base_url": "https://ollama.com/v1", "api_key_env": "OLLAMA_API_KEY" },
+    "lmstudio":     { "base_url": "http://localhost:1234/v1" },
+    "llamacpp":     { "base_url": "http://localhost:8080/v1" },
+    "openrouter":   { "base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY" }
+  },
+  "models": {}
 }
 ```
 
 Adding a provider is a base URL — no adapter code, because they all speak the
-same wire format. Models are `provider/model`, split on the first `/` so Ollama
-names containing slashes (`hf.co/user/repo`) still work.
+same wire format. Models are `provider/model`, split on the first `/` so names
+containing slashes (`hf.co/user/repo`, `openai/gpt-oss-120b`) still work.
 
-`context` is optional and declares the model's window in tokens. It drives the
-usage bar, the history trimming below, and automatic switching; without it you
-get a plain token count. There is no way to ask an OpenAI-compatible endpoint how big its context
-is, so it has to be declared.
+`default` may be left empty, in which case the first run asks the configured
+endpoints what they serve and picks one, preferring anything local. Nothing here
+assumes a particular model is installed.
 
-`/model` with no argument lists what the endpoints actually serve, fetched over
-`GET /v1/models`. Adding a model to Ollama makes it appear without touching the
-config.
+Providers added to the defaults in later versions are merged into an existing
+config on load, so new endpoints appear without a rewrite. Anything you have
+edited is left alone.
+
+### Context windows
+
+```json
+"models": {
+  "ollama/qwen3-coder:30b":         { "context": 32768 },
+  "ollama-cloud/qwen3-coder:480b":  { "context": 262144 }
+}
+```
+
+A window is a property of the model, not the endpoint: one Ollama serves many
+models with very different limits. Declare them here; `context` on a provider is
+only a default for models not listed. There is no way to ask an
+OpenAI-compatible endpoint how big a window is, so it has to be written down.
+
+Without it you still get a working agent and a raw token count — just no usage
+percentage, no history trimming, and no automatic switching, all of which need
+something to measure against.
+
+### Cloud models
+
+`ollama-cloud` is configured out of the box. Create a key at
+[ollama.com/settings/keys](https://ollama.com/settings/keys) and export it:
+
+```sh
+export OLLAMA_API_KEY=...
+```
+
+Cloud catalogues list without a key, so `/model` shows them either way — models
+whose provider has no key are marked `needs OLLAMA_API_KEY` rather than failing
+later with a 401. The same applies to any keyed provider.
+
+Local and cloud models mix freely, which is what makes the fallback ladder
+useful: start on something small and local, escalate to a large hosted model
+only when a conversation actually needs the room.
 
 Anthropic and Gemini are the notable formats *not* covered; they would need a
 real adapter behind the same `provider.Client` interface.
@@ -182,11 +215,17 @@ Off by default. Turn it on with a ladder of models, largest last:
 {
   "auto_switch": true,
   "fallback": [
-    "ollama/qwen3.5-16k:latest",
-    "openrouter/anthropic/claude-sonnet-4"
-  ]
+    "ollama/qwen3-coder:30b",
+    "ollama-cloud/qwen3-coder:480b"
+  ],
+  "models": {
+    "ollama/qwen3-coder:30b":        { "context": 32768 },
+    "ollama-cloud/qwen3-coder:480b": { "context": 262144 }
+  }
 }
 ```
+
+The ladder is yours to define and can mix local and hosted models freely.
 
 When the conversation outgrows the current model, raunen moves up the ladder and
 carries on instead of failing:

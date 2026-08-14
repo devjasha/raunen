@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -52,6 +54,14 @@ func run() error {
 	if ref == "" {
 		ref = cfg.Default
 	}
+	if ref == "" {
+		// Nothing configured: ask the endpoints what they have rather than
+		// guessing at a model name the user may not have pulled.
+		if ref, err = discoverModel(cfg); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, "raunen: no default model set, using", ref)
+	}
 	p, model, err := cfg.Resolve(ref)
 	if err != nil {
 		return err
@@ -71,9 +81,9 @@ func run() error {
 
 	// Tool results are capped relative to the model's context, so a single read
 	// cannot evict the conversation around it.
-	reg := tools.Default(root, tools.OutputBudget(p.Context))
+	reg := tools.Default(root, tools.OutputBudget(cfg.ContextFor(ref)))
 	ag := agent.New(provider.New(p.BaseURL, p.Key(), model), reg, cfg.System)
-	ag.SetContext(p.Context)
+	ag.SetContext(cfg.ContextFor(ref))
 	ag.SetRef(ref)
 	ag.SetAutoSwitch(cfg.AutoSwitch)
 	ag.SetFallbacks(fallbacks(cfg))
@@ -102,6 +112,42 @@ func run() error {
 	return err
 }
 
+// discoverModel asks the configured endpoints what they serve and picks one,
+// preferring anything served locally: it costs nothing to run and needs no key.
+func discoverModel(cfg *config.Config) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var local, remote []string
+	for name, p := range cfg.Providers {
+		ids, err := provider.ListModels(ctx, p.BaseURL, p.Key())
+		if err != nil || len(ids) == 0 {
+			continue
+		}
+		sort.Strings(ids)
+		ref := name + "/" + ids[0]
+		if isLocal(p.BaseURL) {
+			local = append(local, ref)
+		} else {
+			remote = append(remote, ref)
+		}
+	}
+
+	sort.Strings(local)
+	sort.Strings(remote)
+	if len(local) > 0 {
+		return local[0], nil
+	}
+	if len(remote) > 0 {
+		return remote[0], nil
+	}
+	return "", fmt.Errorf("no models found — is a provider running? set \"default\" in %s", config.Path())
+}
+
+func isLocal(baseURL string) bool {
+	return strings.Contains(baseURL, "localhost") || strings.Contains(baseURL, "127.0.0.1")
+}
+
 // fallbacks resolves the escalation ladder, skipping entries that do not
 // resolve so one bad reference cannot break startup.
 func fallbacks(cfg *config.Config) []agent.Candidate {
@@ -115,7 +161,7 @@ func fallbacks(cfg *config.Config) []agent.Candidate {
 		out = append(out, agent.Candidate{
 			Ref:     ref,
 			Client:  provider.New(p.BaseURL, p.Key(), model),
-			Context: p.Context,
+			Context: cfg.ContextFor(ref),
 		})
 	}
 	return out

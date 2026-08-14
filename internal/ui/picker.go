@@ -19,6 +19,7 @@ import (
 // the configured endpoints actually serve. The list is fetched rather than
 // configured, so it reflects what is installed right now.
 type picker struct {
+	needsKey map[string]string
 	all      []string
 	filtered []string
 	filter   string
@@ -30,7 +31,12 @@ type picker struct {
 // modelsMsg carries the result of asking every provider what it has.
 type modelsMsg struct {
 	models []string
-	err    error
+	// needsKey maps a provider to the environment variable it wants, for those
+	// that declared one and did not find it set. Their catalogue usually lists
+	// fine while completions would fail, so it is worth saying so before the
+	// model is chosen rather than after it 401s.
+	needsKey map[string]string
+	err      error
 }
 
 const (
@@ -54,11 +60,12 @@ func fetchModels(cfg *config.Config) tea.Cmd {
 		}
 
 		var (
-			mu   sync.Mutex
-			all  []string
-			errs []string
-			wg   sync.WaitGroup
-			ctx  = context.Background()
+			mu    sync.Mutex
+			all   []string
+			errs  []string
+			needs = map[string]string{}
+			wg    sync.WaitGroup
+			ctx   = context.Background()
 		)
 
 		for name, p := range cfg.Providers {
@@ -74,6 +81,9 @@ func fetchModels(cfg *config.Config) tea.Cmd {
 					errs = append(errs, name)
 					return
 				}
+				if p.APIKeyEnv != "" && p.Key() == "" {
+					needs[name] = p.APIKeyEnv
+				}
 				for _, id := range ids {
 					all = append(all, name+"/"+id)
 				}
@@ -86,7 +96,7 @@ func fetchModels(cfg *config.Config) tea.Cmd {
 			return modelsMsg{err: fmt.Errorf("no models found (unreachable: %s)",
 				strings.Join(errs, ", "))}
 		}
-		return modelsMsg{models: all}
+		return modelsMsg{models: all, needsKey: needs}
 	}
 }
 
@@ -167,7 +177,17 @@ func (p *picker) render(width int, current string) string {
 			if line == current {
 				marker = "• "
 			}
-			text := ansi.Truncate(marker+line, inner, "…")
+			// Flag a model whose provider has no key: its catalogue lists but
+			// its completions will not run.
+			suffix := ""
+			if p.needsKey != nil {
+				if prov, _, ok := strings.Cut(line, "/"); ok {
+					if env := p.needsKey[prov]; env != "" {
+						suffix = "  needs " + env
+					}
+				}
+			}
+			text := ansi.Truncate(marker+line+suffix, inner, "…")
 			if i == p.cursor {
 				b.WriteString(pickerSelected.Render("❯ " + text))
 			} else {

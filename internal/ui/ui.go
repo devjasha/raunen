@@ -440,6 +440,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modelsMsg:
 		if m.pick != nil {
 			m.pick.err = msg.err
+			m.pick.needsKey = msg.needsKey
 			m.pick.setModels(msg.models)
 		}
 		return m, nil
@@ -576,7 +577,7 @@ func (m *Model) switchModel(ref string) (tea.Model, tea.Cmd) {
 		return *m, nil
 	}
 	m.ag.SetClient(provider.New(p.BaseURL, p.Key(), model))
-	m.ag.SetContext(p.Context)
+	m.ag.SetContext(m.cfg.ContextFor(ref))
 	m.ag.SetRef(ref)
 	m.ref = ref
 	m.add(okStyle.Render("✓ switched to " + ref))

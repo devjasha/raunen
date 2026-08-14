@@ -17,10 +17,18 @@ type Provider struct {
 	APIKey  string `json:"api_key,omitempty"`
 	// APIKeyEnv reads the key from the environment instead of storing it here.
 	APIKeyEnv string `json:"api_key_env,omitempty"`
-	// Context is the model's context window in tokens. It is optional and only
-	// drives the usage bar: set it and the bar shows how full the context is,
-	// leave it out and the bar shows a raw token count. There is no way to ask
-	// an OpenAI-compatible endpoint for this, so it has to be declared.
+	// Context is a default context window in tokens for this provider's models.
+	// Most endpoints serve several models with different windows, so this is
+	// only a fallback — declare per-model windows under Config.Models.
+	Context int `json:"context,omitempty"`
+}
+
+// ModelConfig is per-model settings. A provider usually serves many models with
+// very different windows, so the window belongs here rather than on the
+// provider, which only carries a default for anything not listed.
+type ModelConfig struct {
+	// Context is the model's window in tokens. There is no way to ask an
+	// OpenAI-compatible endpoint for this, so it has to be declared.
 	Context int `json:"context,omitempty"`
 }
 
@@ -45,8 +53,25 @@ type Config struct {
 	// Fallback is an escalation ladder of "provider/model" references, tried in
 	// the order given. Put larger contexts later.
 	Fallback []string `json:"fallback"`
+	// Models holds per-model settings, keyed by "provider/model". Anything not
+	// listed falls back to its provider.
+	Models map[string]ModelConfig `json:"models"`
 	// System overrides the built-in system prompt when non-empty.
 	System string `json:"system,omitempty"`
+}
+
+// ContextFor returns the window for a "provider/model" reference: the model's
+// own if declared, otherwise its provider's default, otherwise zero for
+// unknown. Zero disables the usage bar's percentage, history trimming and
+// automatic switching, all of which need something to measure against.
+func (c *Config) ContextFor(ref string) int {
+	if m, ok := c.Models[ref]; ok && m.Context > 0 {
+		return m.Context
+	}
+	if p, _, err := c.Resolve(ref); err == nil {
+		return p.Context
+	}
+	return 0
 }
 
 // Resolve splits a "provider/model" reference and looks up the provider.
@@ -88,17 +113,24 @@ func Path() string {
 
 func defaults() *Config {
 	return &Config{
-		Default: "ollama/qwen3.5:latest",
+		// Left empty on purpose: the first run picks whatever the endpoints
+		// actually serve, rather than naming a model the user may not have.
+		Default: "",
 		// Off by default, and listed so the knobs are visible in the file that
 		// gets written on first run.
 		AutoSwitch: false,
 		Fallback:   []string{},
+		Models:     map[string]ModelConfig{},
 		Providers: map[string]Provider{
 			// Ollama defaults to a 4096-token context regardless of what the
 			// model supports; raise OLLAMA_CONTEXT_LENGTH and this together.
 			"ollama":   {BaseURL: "http://localhost:11434/v1", Context: 4096},
 			"lmstudio": {BaseURL: "http://localhost:1234/v1"},
 			"llamacpp": {BaseURL: "http://localhost:8080/v1"},
+			"ollama-cloud": {
+				BaseURL:   "https://ollama.com/v1",
+				APIKeyEnv: "OLLAMA_API_KEY",
+			},
 			"openrouter": {
 				BaseURL:   "https://openrouter.ai/api/v1",
 				APIKeyEnv: "OPENROUTER_API_KEY",
@@ -127,8 +159,17 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	if len(c.Providers) == 0 {
-		c.Providers = defaults().Providers
+	if c.Providers == nil {
+		c.Providers = map[string]Provider{}
+	}
+	// Merge in any provider added to the defaults since this file was written,
+	// so an existing config picks up new endpoints without being rewritten.
+	// Only entirely absent names are added: anything the user has edited is
+	// left exactly as they left it.
+	for name, p := range defaults().Providers {
+		if _, ok := c.Providers[name]; !ok {
+			c.Providers[name] = p
+		}
 	}
 	return &c, nil
 }
