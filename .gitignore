@@ -1,0 +1,5 @@
+# built binary
+/raunen
+
+# session store, if anyone points XDG at the checkout
+/sessions/

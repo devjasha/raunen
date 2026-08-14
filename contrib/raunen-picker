@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Pick a running raunen instance and jump to its tmux pane.
+#
+# Meant to be run from a tmux popup:
+#   bind R display-popup -E -w 70% -h 50% raunen-picker
+#
+# raunen advertises each live instance in ~/.local/share/raunen/running; tmux
+# cannot be asked directly, because it only knows a pane's foreground process,
+# which during a turn is whatever the agent is running rather than raunen.
+set -euo pipefail
+
+rows=$(raunen --running 2>/dev/null || true)
+
+if [ -z "$rows" ]; then
+	echo "No raunen sessions are running."
+	echo
+	echo "Saved sessions:  raunen --sessions"
+	echo "Resume the last: raunen --continue"
+	# Popups close the instant the command exits, so wait to be dismissed.
+	read -rsn1 -p "Press any key to close…"
+	exit 0
+fi
+
+# pane \t pid \t dir \t model \t title  ->  a padded, readable line
+menu=$(printf '%s\n' "$rows" | awk -F'\t' '
+	{ printf "%-14s  %-18s  %s\n", $3, $4, $5 }
+')
+
+pick=$(printf '%s\n' "$menu" | fzf \
+	--prompt='raunen ❯ ' \
+	--header='running sessions — enter to jump, esc to cancel' \
+	--layout=reverse --info=inline --no-multi) || exit 0
+
+# fzf returns the rendered line; map it back by position.
+index=$(printf '%s\n' "$menu" | grep -nxF "$pick" | head -1 | cut -d: -f1)
+[ -n "$index" ] || exit 0
+
+pane=$(printf '%s\n' "$rows" | sed -n "${index}p" | cut -f1)
+
+if [ -z "$pane" ]; then
+	echo "That instance is not running inside tmux."
+	read -rsn1 -p "Press any key to close…"
+	exit 0
+fi
+
+# Resolve session, window and pane so the jump works across tmux sessions.
+tmux switch-client -t "$pane" 2>/dev/null || true
+tmux select-window -t "$pane" 2>/dev/null || true
+tmux select-pane -t "$pane" 2>/dev/null || true
