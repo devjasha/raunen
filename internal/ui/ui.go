@@ -974,7 +974,6 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 			"  /sessions                list saved sessions",
 			"  /resume <id>             pick up a saved session",
 			"  /quit                    exit",
-			"  tab                      cycle auto / accept edits / plan",
 			"  esc                      cancel the running turn",
 			"  pgup/pgdn, shift+↑/↓     scroll the transcript",
 			"  shift+enter              newline without sending",
