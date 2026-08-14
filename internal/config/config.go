@@ -53,6 +53,10 @@ type Config struct {
 	// Fallback is an escalation ladder of "provider/model" references, tried in
 	// the order given. Put larger contexts later.
 	Fallback []string `json:"fallback"`
+	// FreeFallback appends every free model the providers report to the ladder,
+	// largest context first. Free tiers are rate limited rather than billed, so
+	// a ladder of them is a way to keep going rather than to spend more.
+	FreeFallback bool `json:"free_fallback"`
 	// Subagents lets the model delegate self-contained work to a sub-agent with
 	// its own context. It costs one more tool schema on every request, so it
 	// can be turned off on a very small window.
@@ -131,10 +135,11 @@ func defaults() *Config {
 		Default: "",
 		// Off by default, and listed so the knobs are visible in the file that
 		// gets written on first run.
-		AutoSwitch: false,
-		Fallback:   []string{},
-		Models:     map[string]ModelConfig{},
-		Subagents:  &enabled,
+		AutoSwitch:   false,
+		Fallback:     []string{},
+		FreeFallback: false,
+		Models:       map[string]ModelConfig{},
+		Subagents:    &enabled,
 		Providers: map[string]Provider{
 			// Ollama defaults to a 4096-token context regardless of what the
 			// model supports; raise OLLAMA_CONTEXT_LENGTH and this together.

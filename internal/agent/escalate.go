@@ -40,7 +40,9 @@ func (a *Agent) nextCandidate() (Candidate, bool) {
 		if c.Ref == a.ref {
 			continue
 		}
-		if c.Context > 0 && a.contextTokens > 0 && c.Context <= a.contextTokens {
+		// A smaller window is pointless when the problem is room — but when the
+		// problem is a rate limit, any model that answers is an improvement.
+		if !a.rateLimited && c.Context > 0 && a.contextTokens > 0 && c.Context <= a.contextTokens {
 			continue
 		}
 		return c, true
@@ -59,6 +61,7 @@ func (a *Agent) escalate(reason string, out chan<- Event) bool {
 		return false
 	}
 
+	a.rateLimited = reason == "rate limited"
 	from := a.ref
 	// Advance past this rung so a turn cannot loop between two models.
 	for i, x := range a.fallbacks {

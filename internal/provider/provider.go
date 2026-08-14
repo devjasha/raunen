@@ -8,9 +8,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -173,7 +175,14 @@ func (c *Client) Stream(ctx context.Context, msgs []Message, tools []ToolSchema,
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return Message{}, usage, fmt.Errorf("%s returned %s: %s", c.BaseURL, resp.Status, strings.TrimSpace(string(b)))
+		msg := strings.TrimSpace(string(b))
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusPaymentRequired {
+			// Free tiers refuse like this when a quota runs out. Another model
+			// may well answer, so this is marked as worth retrying elsewhere.
+			return Message{}, usage, fmt.Errorf("%w: %s returned %s: %s",
+				ErrRateLimited, c.BaseURL, resp.Status, msg)
+		}
+		return Message{}, usage, fmt.Errorf("%s returned %s: %s", c.BaseURL, resp.Status, msg)
 	}
 
 	out := Message{Role: Assistant}
@@ -293,10 +302,75 @@ func (c *Client) Stream(ctx context.Context, msgs []Message, tools []ToolSchema,
 	return out, usage, nil
 }
 
-// ListModels asks an endpoint what it can serve. Every OpenAI-compatible
-// server implements this, so it works for local runtimes and gateways alike
-// without a per-provider catalogue.
-func ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
+// ModelInfo is what an endpoint reports about a model. Context and Free are
+// only as good as the endpoint: Ollama reports neither, OpenRouter reports
+// both, and a zero Context means "not stated" rather than "no context".
+type ModelInfo struct {
+	ID      string
+	Context int
+	Free    bool
+}
+
+// ErrRateLimited marks a refusal that another model might not hit. It is worth
+// distinguishing because the response is to move on rather than to give up,
+// which is the whole point of a ladder of free models.
+var ErrRateLimited = errors.New("rate limited")
+
+// ListModelsDetailed asks an endpoint what it serves, keeping the pricing and
+// context it reports. OpenRouter returns both; endpoints that do not simply
+// leave them zero.
+func ListModelsDetailed(ctx context.Context, baseURL, apiKey string) ([]ModelInfo, error) {
+	body, err := fetchModels(ctx, baseURL, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ModelInfo, 0, len(body.Data))
+	for _, m := range body.Data {
+		info := ModelInfo{ID: m.ID, Context: m.ContextLength}
+		// Free means it costs nothing to send or receive. Other prices —
+		// images, web search — do not decide whether a chat turn is free.
+		prompt, okP := price(m.Pricing["prompt"])
+		completion, okC := price(m.Pricing["completion"])
+		info.Free = okP && okC && prompt == 0 && completion == 0
+		out = append(out, info)
+	}
+	return out, nil
+}
+
+// price reads a per-token price, which arrives inconsistently: usually a
+// decimal string such as "0.000000375", sometimes a bare number, and for some
+// models an array of tiered prices. Anything not reducible to a single number
+// reports false, so an unreadable price is never mistaken for a free one.
+func price(raw json.RawMessage) (float64, bool) {
+	if len(raw) == 0 {
+		return 0, false
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if s == "" {
+			return 0, false
+		}
+		v, err := strconv.ParseFloat(s, 64)
+		return v, err == nil
+	}
+	var f float64
+	if json.Unmarshal(raw, &f) == nil {
+		return f, true
+	}
+	return 0, false
+}
+
+type modelsBody struct {
+	Data []struct {
+		ID            string `json:"id"`
+		ContextLength int    `json:"context_length"`
+		// Held raw: the shape varies per model, and a single odd entry must not
+		// fail the whole catalogue.
+		Pricing map[string]json.RawMessage `json:"pricing"`
+	} `json:"data"`
+}
+
+func fetchModels(ctx context.Context, baseURL, apiKey string) (*modelsBody, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimSuffix(baseURL, "/")+"/models", nil)
 	if err != nil {
@@ -305,10 +379,7 @@ func ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-
-	// Unlike a completion, this should never hang: an endpoint that is not
-	// running is the common case, and the picker has to stay responsive.
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -317,13 +388,19 @@ func ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s returned %s", baseURL, resp.Status)
 	}
-
-	var body struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
+	var body modelsBody
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return &body, nil
+}
+
+// ListModels asks an endpoint what it can serve. Every OpenAI-compatible
+// server implements this, so it works for local runtimes and gateways alike
+// without a per-provider catalogue.
+func ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
+	body, err := fetchModels(ctx, baseURL, apiKey)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]string, 0, len(body.Data))

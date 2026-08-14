@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -114,6 +115,9 @@ type Agent struct {
 	fallbacks  []Candidate
 	rung       int
 	autoSwitch bool
+	// rateLimited records that the last move was forced by a refusal rather
+	// than by running out of room, which changes what counts as an upgrade.
+	rateLimited bool
 	// schemaTokens is what the tool definitions cost on every request. They are
 	// not part of the message list but they are very much part of the prompt:
 	// leaving them out understates a small model's usage by hundreds of tokens.
@@ -338,6 +342,12 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			out <- Usage{usage}
 		}
 		if err != nil {
+			// A rate limit is a routing decision, not a dead end: a free tier
+			// that has run out says nothing about whether the next model will.
+			if errors.Is(err, provider.ErrRateLimited) &&
+				a.escalate("rate limited", out) {
+				continue
+			}
 			// Keep the partial assistant message out of the transcript on
 			// failure; a half-written turn confuses the next request.
 			out <- Failed{Err: err}

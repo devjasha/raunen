@@ -255,6 +255,37 @@ Off by default. Turn it on with a ladder of models, largest last:
 
 The ladder is yours to define and can mix local and hosted models freely.
 
+### Free models
+
+```json
+{ "auto_switch": true, "free_fallback": true }
+```
+
+This appends every model the providers report as free to the ladder, roomiest
+first. On OpenRouter today that is 18 models, several with a 1M-token context —
+so a local model that runs out of room can hand off to something far larger
+without a bill.
+
+Free is read from the endpoint's own pricing rather than from a maintained
+list, so it stays current: a model counts as free when both its prompt and
+completion prices are zero. Prices that cannot be reduced to a single number —
+some models quote tiered pricing as an array — are never assumed to be free.
+
+The same discovery supplies **context windows**, which is why free rungs get
+real limits without being declared. Any provider that reports `context_length`
+gives raunen the window for free; an explicitly configured `context` still wins.
+
+Free tiers refuse with `429` rather than a bill, and that is treated as a
+routing decision rather than a failure: raunen moves to the next rung and
+retries. Rate-limited moves are the one case where a *smaller* window is
+acceptable — any model that answers beats one that will not.
+
+**"Free" means no per-token cost, not no account.** OpenRouter's free models
+still need `OPENROUTER_API_KEY`; without it they return `401`. Rungs whose key
+is missing are dropped from the ladder rather than kept to fail one by one, so
+the feature is inert until a key is set instead of turning one failure into
+eighteen.
+
 When the conversation outgrows the current model, raunen moves up the ladder and
 carries on instead of failing:
 

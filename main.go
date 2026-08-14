@@ -86,12 +86,26 @@ func run() error {
 
 	// Tool results are capped relative to the model's context, so a single read
 	// cannot evict the conversation around it.
-	reg := tools.Default(root, tools.OutputBudget(cfg.ContextFor(ref)))
+	// A declared window wins; otherwise ask the endpoint, which for gateways
+	// like OpenRouter knows the answer already.
+	window := cfg.ContextFor(ref)
+	if window == 0 {
+		window = discoverContext(p, model)
+	}
+
+	reg := tools.Default(root, tools.OutputBudget(window))
 	ag := agent.New(provider.New(p.BaseURL, p.Key(), model), reg, cfg.System)
-	ag.SetContext(cfg.ContextFor(ref))
+	ag.SetContext(window)
 	ag.SetRef(ref)
 	ag.SetAutoSwitch(cfg.AutoSwitch)
-	ag.SetFallbacks(fallbacks(cfg))
+	ladder := fallbacks(cfg)
+	ag.SetFallbacks(ladder)
+	if debug && len(ladder) > 0 {
+		fmt.Fprintf(os.Stderr, dim("[ladder] %d models\n"), len(ladder))
+		for i, c := range ladder {
+			fmt.Fprintf(os.Stderr, dim("  %2d. %-52s ctx=%d\n"), i+1, c.Ref, c.Context)
+		}
+	}
 	if cfg.SubagentsEnabled() {
 		ag.EnableSubagents()
 	}
@@ -166,13 +180,87 @@ func fallbacks(cfg *config.Config) []agent.Candidate {
 			fmt.Fprintln(os.Stderr, "raunen: ignoring fallback:", err)
 			continue
 		}
+		if p.APIKeyEnv != "" && p.Key() == "" {
+			fmt.Fprintf(os.Stderr, "raunen: ignoring fallback %s: %s is not set\n", ref, p.APIKeyEnv)
+			continue
+		}
 		out = append(out, agent.Candidate{
 			Ref:     ref,
 			Client:  provider.New(p.BaseURL, p.Key(), model),
 			Context: cfg.ContextFor(ref),
 		})
 	}
+	if cfg.FreeFallback {
+		out = append(out, freeModels(cfg)...)
+	}
 	return out
+}
+
+// freeModels asks the providers which of their models cost nothing and turns
+// them into ladder rungs, roomiest first.
+//
+// Free tiers are rate limited rather than billed, so a ladder of them is a way
+// to keep going when one refuses — not a way to spend more. Only providers that
+// report pricing contribute; a local endpoint reports none and is skipped,
+// which is correct, since a local model is already free and already in use.
+func freeModels(cfg *config.Config) []agent.Candidate {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var out []agent.Candidate
+	for name, p := range cfg.Providers {
+		// A catalogue usually lists without a key while completions do not
+		// work without one. Including such a model would turn one failure into
+		// eighteen, as the ladder walked through every model it cannot call.
+		if p.APIKeyEnv != "" && p.Key() == "" {
+			continue
+		}
+		infos, err := provider.ListModelsDetailed(ctx, p.BaseURL, p.Key())
+		if err != nil {
+			continue
+		}
+		for _, m := range infos {
+			if !m.Free {
+				continue
+			}
+			ref := name + "/" + m.ID
+			out = append(out, agent.Candidate{
+				Ref:    ref,
+				Client: provider.New(p.BaseURL, p.Key(), m.ID),
+				// A declared window still wins: the endpoint states what the
+				// model can take, the config states what you want to use.
+				Context: firstNonZero(cfg.ContextFor(ref), m.Context),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Context > out[j].Context })
+	return out
+}
+
+func firstNonZero(vals ...int) int {
+	for _, v := range vals {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+// discoverContext asks an endpoint how big a model's window is, for providers
+// that say. It saves declaring by hand what the server already knows.
+func discoverContext(p config.Provider, model string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	infos, err := provider.ListModelsDetailed(ctx, p.BaseURL, p.Key())
+	if err != nil {
+		return 0
+	}
+	for _, m := range infos {
+		if m.ID == model {
+			return m.Context
+		}
+	}
+	return 0
 }
 
 // openSession picks up a saved conversation when asked, and otherwise starts a
