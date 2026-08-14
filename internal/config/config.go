@@ -74,6 +74,26 @@ func (c *Config) SubagentsEnabled() bool {
 	return c.Subagents == nil || *c.Subagents
 }
 
+// ModelContext returns a window declared for this exact model, or zero. It is
+// kept separate from ContextFor because a provider-level context is a blunt
+// default for a whole endpoint, while a discovered window is the truth for one
+// model — so the discovered value should beat the default, and only an explicit
+// per-model setting should beat both.
+func (c *Config) ModelContext(ref string) int {
+	if m, ok := c.Models[ref]; ok && m.Context > 0 {
+		return m.Context
+	}
+	return 0
+}
+
+// ProviderContext returns the endpoint's default window, or zero.
+func (c *Config) ProviderContext(ref string) int {
+	if p, _, err := c.Resolve(ref); err == nil {
+		return p.Context
+	}
+	return 0
+}
+
 // ContextFor returns the window for a "provider/model" reference: the model's
 // own if declared, otherwise its provider's default, otherwise zero for
 // unknown. Zero disables the usage bar's percentage, history trimming and

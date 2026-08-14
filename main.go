@@ -88,10 +88,18 @@ func run() error {
 	// cannot evict the conversation around it.
 	// A declared window wins; otherwise ask the endpoint, which for gateways
 	// like OpenRouter knows the answer already.
-	window := cfg.ContextFor(ref)
+	window := cfg.ModelContext(ref)
 	if window == 0 {
 		window = discoverContext(p, model)
 	}
+	if window == 0 {
+		// Ollama does not report a window over the OpenAI endpoint, and it is
+		// the runtime most likely to be serving a smaller one than you expect.
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		window = provider.OllamaContext(ctx, p.BaseURL, model)
+		cancel()
+	}
+	window = firstNonZero(window, cfg.ProviderContext(ref))
 
 	reg := tools.Default(root, tools.OutputBudget(window))
 	ag := agent.New(provider.New(p.BaseURL, p.Key(), model), reg, cfg.System)
@@ -220,17 +228,34 @@ func freeModels(cfg *config.Config) []agent.Candidate {
 		if err != nil {
 			continue
 		}
+		// A model served from your own machine costs nothing, whatever its
+		// pricing field says — which for a local runtime is nothing at all.
+		local := isLocal(p.BaseURL)
 		for _, m := range infos {
-			if !m.Free {
+			if !m.Free && !local {
 				continue
 			}
 			ref := name + "/" + m.ID
+			// A declared window wins, then whatever the endpoint reported,
+			// then Ollama's native API, which is the only one that knows what
+			// a local model is actually being served with.
+			window := firstNonZero(cfg.ModelContext(ref), m.Context)
+			if window == 0 && local {
+				window = provider.OllamaContext(ctx, p.BaseURL, m.ID)
+			}
+			// The provider default comes last: it describes an endpoint, not a
+			// model, and applying it to every model would make them all look
+			// identical and the ladder pointless.
+			window = firstNonZero(window, cfg.ProviderContext(ref))
+			// A rung with no known window cannot be judged an upgrade, and
+			// switching to something smaller is worse than not switching.
+			if window == 0 {
+				continue
+			}
 			out = append(out, agent.Candidate{
-				Ref:    ref,
-				Client: provider.New(p.BaseURL, p.Key(), m.ID),
-				// A declared window still wins: the endpoint states what the
-				// model can take, the config states what you want to use.
-				Context: firstNonZero(cfg.ContextFor(ref), m.Context),
+				Ref:     ref,
+				Client:  provider.New(p.BaseURL, p.Key(), m.ID),
+				Context: window,
 			})
 		}
 	}

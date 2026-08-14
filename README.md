@@ -384,6 +384,28 @@ routing decision rather than a failure: raunen moves to the next rung and
 retries. Rate-limited moves are the one case where a *smaller* window is
 acceptable — any model that answers beats one that will not.
 
+**Local models count as free too.** Anything served from your own machine joins
+the ladder without needing pricing to say so. There is a catch specific to
+Ollama: it reports the *architecture's maximum* context, not the window it is
+actually serving. qwen3.5 reports 262144 and is served 4096. Only an explicit
+`num_ctx` is trusted, so a model without one is reported as unknown rather than
+guessed at — otherwise the ladder would happily "upgrade" from an 8192 model to
+one it believed had 262144 and that actually had 4096.
+
+To put a roomier local model on the ladder, give it a window and it appears:
+
+```sh
+printf 'FROM qwen3.5:latest\nPARAMETER num_ctx 32768\n' > Modelfile
+ollama create qwen3.5-32k -f Modelfile
+```
+
+`/status` says whether any rung is actually roomier than what you are on, since
+escalation skips the rest:
+
+```
+ladder    3 models, none roomier than 8192
+```
+
 **"Free" means no per-token cost, not no account.** OpenRouter's free models
 still need `OPENROUTER_API_KEY`; without it they return `401`. Rungs whose key
 is missing are dropped from the ladder rather than kept to fail one by one, so

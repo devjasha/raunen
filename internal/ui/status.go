@@ -115,13 +115,26 @@ func (m *Model) status() {
 	// The ladder is what happens when this model runs out of room, so it is
 	// worth seeing before it does rather than after.
 	ladder := m.ag.Ladder()
+	// A rung is only useful if it is roomier than what is in use; escalation
+	// skips the rest. Counting them all would promise a move that cannot happen.
+	usable := 0
+	for _, c := range ladder {
+		if c.Context == 0 || m.ag.Context() == 0 || c.Context > m.ag.Context() {
+			usable++
+		}
+	}
+
 	switch {
 	case !m.cfg.AutoSwitch:
 		row("ladder", dimStyle.Render("auto_switch off"))
 	case len(ladder) == 0:
-		row("ladder", errStyle.Render("auto_switch on, but nothing to switch to"))
+		row("ladder", errStyle.Render("nothing to switch to")+
+			dimStyle.Render("  see the free models section of the README"))
+	case usable == 0:
+		row("ladder", askStyle.Render(fmt.Sprintf("%d models, none roomier than %d",
+			len(ladder), m.ag.Context())))
 	default:
-		row("ladder", okStyle.Render(fmt.Sprintf("%d models", len(ladder))))
+		row("ladder", okStyle.Render(fmt.Sprintf("%d of %d models are roomier", usable, len(ladder))))
 		for i, c := range ladder {
 			if i == 3 {
 				m.push(entry{first: "            ", cont: "            ",
