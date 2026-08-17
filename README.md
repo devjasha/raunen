@@ -249,6 +249,35 @@ held back 2 models
           nvidia/typo         ·  locked out: the endpoint rejected it
 ```
 
+## Choosing a model
+
+`/model` with no argument opens a searchable list of everything your endpoints
+actually serve:
+
+```
+╭──────────────────────────────────────────────────────────────╮
+│ search › gemma free    2 of 464                              │
+│ ❯   openrouter/google/gemma-4-26b-a4b-it:free                │
+│     openrouter/google/gemma-4-31b-it:free                    │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+`↑`/`↓` to move, `enter` selects, `esc` cancels. `•` marks the model in use, and
+the count shows how far the search has narrowed things.
+
+**Searching is forgiving**, because model names are long and structured. Terms
+are separated by spaces and all of them must match, so `gemma free` does what you
+would hope. Each term matches as a substring *or* as a subsequence, so `nemlight`
+finds `nemotron-3.5-lightning`. Substring matches come first — they are what
+someone typing a name expects — with subsequence matches below them.
+
+The list is fetched rather than configured: every provider is asked over
+`GET /v1/models`, which any OpenAI-compatible endpoint implements. Adding a model
+to Ollama makes it appear without touching the config, and providers are queried
+in parallel so one that is not running does not hold up the rest.
+
+`/model provider/model` still switches directly, without the list.
+
 ## API keys
 
 Choosing a model whose provider has no key would otherwise fail with a `401` a

@@ -118,18 +118,71 @@ func (p *picker) setModels(models []string) {
 	p.apply()
 }
 
-// apply refreshes the visible list after the filter changes.
+// apply refreshes the visible list after the query changes.
+//
+// Model names are long and structured — "openrouter/nvidia/nemotron-3.5-
+// lightning:free" — so matching is more forgiving than a substring test. Terms
+// are separated by spaces and all must match, which makes "nvidia free" a
+// useful query, and each term matches either as a substring or as a subsequence
+// so "nemlight" finds nemotron-lightning.
 func (p *picker) apply() {
 	p.filtered = p.filtered[:0]
-	needle := strings.ToLower(p.filter)
+
+	terms := strings.Fields(strings.ToLower(p.filter))
+	if len(terms) == 0 {
+		p.filtered = append(p.filtered, p.all...)
+		p.clampCursor()
+		return
+	}
+
+	// Substring matches are what someone typing a name expects to see first;
+	// subsequence matches are the helpful surprise and belong below them.
+	var exact, fuzzy []string
 	for _, m := range p.all {
-		if needle == "" || strings.Contains(strings.ToLower(m), needle) {
-			p.filtered = append(p.filtered, m)
+		lower := strings.ToLower(m)
+		hit, allSubstring := true, true
+		for _, t := range terms {
+			if strings.Contains(lower, t) {
+				continue
+			}
+			allSubstring = false
+			if !subsequence(lower, t) {
+				hit = false
+				break
+			}
+		}
+		if !hit {
+			continue
+		}
+		if allSubstring {
+			exact = append(exact, m)
+		} else {
+			fuzzy = append(fuzzy, m)
 		}
 	}
+	p.filtered = append(append(p.filtered, exact...), fuzzy...)
+	p.clampCursor()
+}
+
+func (p *picker) clampCursor() {
 	if p.cursor >= len(p.filtered) {
 		p.cursor = max(0, len(p.filtered)-1)
 	}
+	if p.cursor < 0 {
+		p.cursor = 0
+	}
+}
+
+// subsequence reports whether every character of needle appears in haystack in
+// order, which is what makes an abbreviation find a long name.
+func subsequence(haystack, needle string) bool {
+	i := 0
+	for _, r := range haystack {
+		if i < len(needle) && rune(needle[i]) == r {
+			i++
+		}
+	}
+	return i == len(needle)
 }
 
 func (p *picker) move(d int) {
@@ -146,6 +199,12 @@ func (p *picker) selected() string {
 	return p.filtered[p.cursor]
 }
 
+// cursorCol is where the caret sits in the search line, so it looks like the
+// text field it is.
+func (p *picker) cursorCol() int {
+	return lipgloss.Width("search › ") + lipgloss.Width(p.filter)
+}
+
 // height is how many rows the overlay occupies, so the transcript above it can
 // give up exactly that much and the input stays put.
 func (p *picker) height() int {
@@ -159,13 +218,17 @@ func (p *picker) render(width int, current string) string {
 	inner := max(20, width-4)
 
 	var b strings.Builder
-	head := "switch model"
-	if p.loading {
-		head = "switch model — loading…"
-	}
-	b.WriteString(dimStyle.Render(head))
-	if p.filter != "" {
-		b.WriteString(dimStyle.Render("  /" + p.filter))
+
+	// A visible search line, always: a list that quietly filters when you type
+	// is a feature nobody finds.
+	b.WriteString(dimStyle.Render("search ") + promptStyle.Render("› ") + p.filter)
+	switch {
+	case p.loading:
+		b.WriteString(dimStyle.Render("   loading…"))
+	case p.filter != "":
+		b.WriteString(dimStyle.Render(fmt.Sprintf("   %d of %d", len(p.filtered), len(p.all))))
+	case len(p.all) > 0:
+		b.WriteString(dimStyle.Render(fmt.Sprintf("   %d models", len(p.all))))
 	}
 	b.WriteString("\n")
 
@@ -175,7 +238,7 @@ func (p *picker) render(width int, current string) string {
 	case p.loading:
 		b.WriteString(dimStyle.Render("asking the configured endpoints…"))
 	case len(p.filtered) == 0:
-		b.WriteString(dimStyle.Render("nothing matches " + p.filter))
+		b.WriteString(dimStyle.Render("nothing matches"))
 	default:
 		// Scroll the window so the cursor stays visible.
 		start := 0

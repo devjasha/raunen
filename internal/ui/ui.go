@@ -1380,6 +1380,16 @@ func (m Model) View() tea.View {
 
 	// The cursor is positioned relative to the input widget; shift it past the
 	// transcript, the status row, the bar and the border.
+	// While the chooser is open the cursor belongs in its search field, so it
+	// reads as somewhere to type rather than a static list.
+	if m.pick != nil {
+		cur := tea.NewCursor(padX+1+m.pick.cursorCol(), m.viewHeight()+1)
+		if m.sub != nil {
+			cur.Y += m.sub.height()
+		}
+		v.Cursor = cur
+		return v
+	}
 	// While the key prompt is open the cursor belongs in it, not in the input.
 	if m.keyAsk != nil {
 		if cur := m.keyAsk.input.Cursor(); cur != nil {
