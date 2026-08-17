@@ -193,7 +193,9 @@ raunen -version                     # print the version
 |---|---|
 | `enter` | send |
 | `shift+enter` / `alt+enter` | newline without sending |
-| `tab` | cycle auto / accept edits / plan |
+| `tab` | cycle auto / accept edits / plan, or take the highlighted completion |
+| `@` | mark a file or folder in the prompt |
+| `↑` / `↓` | move through the completions while typing `/` or `@` |
 | `esc` | cancel the running turn, or drop a pending reply |
 | `ctrl+c` | cancel if working, otherwise quit |
 | `pgup` / `pgdn` | scroll the transcript |
@@ -201,6 +203,27 @@ raunen -version                     # print the version
 | `y` / `n` | answer an approval prompt |
 | click a reply | quote it in the input |
 | mouse wheel | scroll the transcript |
+
+Typing `/` opens the command list above the input and narrows it as you go, so
+the commands below are discoverable without having to remember them. `tab` takes
+the highlighted one; `enter` completes a half-typed name and runs one typed out
+in full; `esc` puts the list away.
+
+`@` does the same for the files and folders around you, so a question can point
+at what it is about — `explain @internal/ui/ui.go` — rather than describing it
+and hoping the agent looks in the right place. A bare `@` lists the top of the
+tree and `tab` on a folder steps into it, so a path can be walked to as well as
+typed. Completing a file leaves a space and carries on with the sentence.
+
+The list is what git considers part of the project: tracked files plus anything
+untracked that is not ignored, so a `.gitignore`d build directory never appears.
+Outside a repository it is the tree itself, minus the usual heavy directories.
+It is read in the background the first time a mention is typed, and again when a
+new mention starts against a snapshot more than ten seconds old.
+
+The mention goes to the model as the path it names. Nothing is inlined — the
+agent has tools to read what it was pointed at, and choosing what to read out of
+a folder is exactly the sort of thing it is for.
 
 | Command | |
 |---|---|

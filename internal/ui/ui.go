@@ -207,6 +207,20 @@ type Model struct {
 	// ask is a tool call waiting on the user in accept mode. While it is set
 	// the loop is blocked, so keys answer the prompt rather than type.
 	ask *agent.Approval
+	// sug is the completion list for a / command being typed, nil otherwise.
+	sug *suggest
+	// sugOff dismisses the list until the input changes again, so esc and an
+	// accepted completion both close it without it springing straight back.
+	sugOff bool
+	// lastInput is what the input held when the list was last rebuilt, which is
+	// how a dismissal can tell "still the same word" from "typing again".
+	lastInput string
+	// files is the snapshot @ mentions complete against, nil until the first
+	// one is typed: a session that never mentions a file never pays for a scan.
+	files *fileIndex
+	// scanning records that a scan is in flight, so a burst of keystrokes
+	// starts one walk of the tree rather than one per key.
+	scanning bool
 
 	width  int
 	height int
@@ -505,6 +519,9 @@ func (m Model) viewHeight() int {
 	if m.sub != nil {
 		h -= m.sub.height()
 	}
+	if m.sug != nil {
+		h -= m.sug.height()
+	}
 	if m.replyTo != "" {
 		h--
 	}
@@ -527,7 +544,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		return m.onKey(msg)
+		next, cmd := m.onKey(msg)
+		// The completion list follows whatever the keystroke did to the input,
+		// rather than each key handler having to remember to update it.
+		m = next.(Model)
+		return m, tea.Batch(cmd, m.refreshSuggest())
+
+	case filesMsg:
+		m.files = msg.index
+		m.scanning = false
+		// The mention that asked for this has been growing while the tree was
+		// read, so the list is built from what is in the input now.
+		return m, m.refreshSuggest()
 
 	case tea.MouseClickMsg:
 		return m.onClick(msg.Mouse())
@@ -607,7 +635,77 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	m.input, cmd = m.input.Update(msg)
-	return m, cmd
+	// A paste can start a command or a mention just as typing can.
+	return m, tea.Batch(cmd, m.refreshSuggest())
+}
+
+// refreshSuggest rebuilds the completion list from what is in the input. It is
+// called after anything that could have changed it, so the list is derived
+// state rather than something the key handlers have to maintain. The command
+// it returns is a scan of the tree, when a mention needs one.
+func (m *Model) refreshSuggest() tea.Cmd {
+	v := m.input.Value()
+	if v != m.lastInput {
+		// Typing something new is a fresh question, so an earlier dismissal
+		// stops applying.
+		m.lastInput = v
+		m.sugOff = false
+	}
+	if m.sugOff || m.pick != nil || m.keyAsk != nil || m.ask != nil {
+		m.sug = nil
+		return nil
+	}
+	prev := m.sug
+	m.sug = suggestFor(v, m.files)
+	// Keep the highlight on the same entry where it still exists, so narrowing
+	// the list does not move the selection out from under the user.
+	if prev != nil && m.sug != nil {
+		if sel, ok := prev.selected(); ok {
+			for i, it := range m.sug.items {
+				if it.insert == sel.insert {
+					m.sug.cursor = i
+					break
+				}
+			}
+		}
+	}
+	return m.scan()
+}
+
+// scan asks for a fresh snapshot of the tree when a mention needs one: the
+// first time one is typed, and when a new mention starts against a snapshot
+// old enough to have missed something. Not mid-word — a list that reorders
+// under the cursor because a build wrote a file is worse than a stale one.
+func (m *Model) scan() tea.Cmd {
+	if m.sug == nil || m.sug.kind != sugFile || m.scanning {
+		return nil
+	}
+	if m.files != nil && !(m.sug.token == mention && m.files.stale()) {
+		return nil
+	}
+	m.scanning = true
+	return scanFiles(m.root)
+}
+
+// acceptSuggest replaces the token being completed with the highlighted entry.
+// Only the last word of the input is ever rewritten, which is where the token
+// came from.
+func (m *Model) acceptSuggest() (tea.Model, tea.Cmd) {
+	it, ok := m.sug.selected()
+	if !ok {
+		return *m, nil
+	}
+	text := strings.TrimSuffix(m.input.Value(), m.sug.token) + it.insert
+	if it.space {
+		text += " "
+	}
+	m.input.SetValue(text)
+	m.input.CursorEnd()
+	// A finished completion closes the list. One that carries on — a directory
+	// to step into — leaves it open, and the rebuild below fills it with what
+	// is inside.
+	m.lastInput, m.sugOff, m.sug = text, it.space, nil
+	return *m, m.refreshSuggest()
 }
 
 func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -683,6 +781,41 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.answer(false)
 		}
 		return *m, nil
+	}
+
+	// The completion list borrows a few keys while it is open — the ones that
+	// do nothing useful on a single-word line — and leaves the rest to the
+	// input, so typing never stops working.
+	if m.sug != nil {
+		switch msg.String() {
+		case "up", "ctrl+p":
+			m.sug.move(-1)
+			return *m, nil
+		case "down", "ctrl+n":
+			m.sug.move(1)
+			return *m, nil
+		case "tab":
+			return m.acceptSuggest()
+		case "esc":
+			// Cancelling the turn is the more urgent meaning of esc; the list
+			// is only in the way when nothing is running.
+			if !m.busy {
+				m.sugOff = true
+				return *m, nil
+			}
+		case "enter":
+			// A half-typed name completes rather than runs: "/mod" is not a
+			// command, and sending it would only earn an "unknown command".
+			// A name typed out in full is meant, so it falls through and runs.
+			//
+			// A mention is the opposite case. It sits inside a message that is
+			// otherwise finished, and taking enter to mean "complete this
+			// path" would leave no way to send a message that ends in one.
+			// Tab completes those, as it does everywhere else.
+			if m.sug.kind == sugCommand && !isCommand(m.input.Value()) {
+				return m.acceptSuggest()
+			}
+		}
 	}
 
 	switch msg.String() {
@@ -1320,23 +1453,18 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		return *m, nil
 
 	case "/help":
-		for _, l := range []string{
-			"  /model                   choose a model from a list",
-			"  /model <provider/model>  switch directly",
-			"  /status                  model, context, ladder, endpoints",
-			"  /companion               your dragon's level and what fed it",
-			"  /providers               list configured endpoints",
-			"  /key <provider>          add an api key",
-			"  /clear                   start a new session",
-			"  /sessions                list saved sessions",
-			"  /resume <id>             pick up a saved session",
-			"  /quit                    exit",
-			"  esc                      cancel the running turn",
-			"  pgup/pgdn, shift+↑/↓     scroll the transcript",
-			"  shift+enter              newline without sending",
-			"  tab                      cycle auto / accept edits / plan",
-		} {
-			m.add(dimStyle.Render(l))
+		// Printed from the same table the completion list offers, so what is
+		// documented and what can be typed cannot disagree.
+		const col = 25
+		for _, c := range commands {
+			line := "  " + padTo(c.label(), col) + c.help
+			if len(c.aliases) > 0 {
+				line += "  (" + strings.Join(c.aliases, ", ") + ")"
+			}
+			m.add(dimStyle.Render(line))
+		}
+		for _, l := range keyHelp {
+			m.add(dimStyle.Render("  " + l))
 		}
 		return *m, nil
 	}
@@ -1419,6 +1547,11 @@ func (m Model) View() tea.View {
 			quoteStyle.Render(ansi.Truncate(first, max(10, m.innerWidth()-28), "…"))+
 			dimStyle.Render(more+"  esc to drop"))
 	}
+	// Directly above the input, so the list reads as belonging to the line
+	// being typed rather than as another thing on the screen.
+	if m.sug != nil {
+		rows = append(rows, strings.Split(m.sug.render(m.innerWidth()), "\n")...)
+	}
 	rows = append(rows, strings.Split(m.box(), "\n")...)
 	// The bar sits under the input: where you are and how full the context is
 	// are reference, not something to read past on the way to typing.
@@ -1475,6 +1608,9 @@ func (m Model) View() tea.View {
 		}
 		if m.pick != nil {
 			below += m.pick.height()
+		}
+		if m.sug != nil {
+			below += m.sug.height()
 		}
 		cur.Y += below
 		cur.X += boxPadX + 1 + padX
