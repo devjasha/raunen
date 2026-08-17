@@ -182,12 +182,17 @@ func (c *Client) Stream(ctx context.Context, msgs []Message, tools []ToolSchema,
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		msg := strings.TrimSpace(string(b))
 		switch {
-		case resp.StatusCode == http.StatusTooManyRequests,
-			resp.StatusCode == http.StatusPaymentRequired:
-			// Free tiers refuse like this when a quota runs out. Another model
-			// may well answer, so this is marked as worth retrying elsewhere.
+		case resp.StatusCode == http.StatusTooManyRequests:
+			// A quota per unit of time. Another model may well answer now, and
+			// this one will answer later.
 			return Message{}, usage, fmt.Errorf("%w: %s returned %s: %s",
 				ErrRateLimited, c.BaseURL, resp.Status, msg)
+
+		case resp.StatusCode == http.StatusPaymentRequired:
+			// Not a rate limit, however much it looks like one from the outside:
+			// no amount of waiting adds credit to an account.
+			return Message{}, usage, fmt.Errorf("%w: %s returned %s: %s",
+				ErrNeedsCredits, c.BaseURL, resp.Status, msg)
 
 		case resp.StatusCode == http.StatusNotFound,
 			resp.StatusCode == http.StatusBadRequest,
@@ -340,8 +345,12 @@ type ModelInfo struct {
 // clears on its own and is worth retrying later; a bad model name never will be;
 // a server that is down affects every model behind it, not just this one.
 var (
-	// ErrRateLimited is a quota or throughput refusal. Wait, then retry.
+	// ErrRateLimited is a throughput refusal. Wait, then retry.
 	ErrRateLimited = errors.New("rate limited")
+	// ErrNeedsCredits is a refusal for want of money rather than of patience.
+	// Waiting cannot clear it, so it must not be treated as a rate limit — the
+	// remedy is credits, a cheaper model, or a smaller request.
+	ErrNeedsCredits = errors.New("insufficient credits")
 	// ErrModelInvalid means this model will not work — wrong name, unsupported
 	// request. Retrying it is pointless however long you wait.
 	ErrModelInvalid = errors.New("model unusable")

@@ -132,9 +132,6 @@ type Agent struct {
 	fallbacks  []Candidate
 	rung       int
 	autoSwitch bool
-	// rateLimited records that the last move was forced by a refusal rather
-	// than by running out of room, which changes what counts as an upgrade.
-	rateLimited bool
 	// health remembers what has recently failed, so the same dead end is not
 	// walked into every turn. Shared with sub-agents by pointer.
 	health *health
@@ -378,7 +375,7 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			if why, tight := a.needsMoreRoom(); tight {
 				reason = why
 			}
-			if !a.escalate(reason, out) {
+			if !a.escalate(forRoom, reason, out) {
 				break
 			}
 		}
@@ -399,7 +396,20 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			switch {
 			case errors.Is(err, provider.ErrRateLimited):
 				wait := a.hp().RateLimited(a.ref)
-				if a.escalate(fmt.Sprintf("rate limited, resting %s", wait.Round(time.Second)), out) {
+				why := endpointMessage(err)
+				out <- Rejected{Ref: a.ref, Reason: why}
+				if a.escalate(forFailure, fmt.Sprintf("rate limited, resting %s", wait.Round(time.Second)), out) {
+					continue
+				}
+
+			case errors.Is(err, provider.ErrNeedsCredits):
+				// Locked out rather than cooled down: waiting does not buy
+				// credit, so retrying this model later in the session would
+				// fail exactly the same way.
+				why := endpointMessage(err)
+				a.hp().LockOut(a.ref, why)
+				out <- Rejected{Ref: a.ref, Reason: why}
+				if a.escalate(forFailure, "needs credits", out) {
 					continue
 				}
 			case errors.Is(err, provider.ErrModelInvalid):
@@ -409,14 +419,14 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 				why := endpointMessage(err)
 				a.hp().LockOut(a.ref, why)
 				out <- Rejected{Ref: a.ref, Reason: why}
-				if a.escalate("previous model rejected", out) {
+				if a.escalate(forFailure, "previous model rejected", out) {
 					continue
 				}
 			case errors.Is(err, provider.ErrUnavailable):
 				if a.hp().Unavailable(a.ref) {
 					out <- Tripped{Provider: providerOf(a.ref), For: breakerCooldown}
 				}
-				if a.escalate("endpoint unavailable", out) {
+				if a.escalate(forFailure, "endpoint unavailable", out) {
 					continue
 				}
 			}
@@ -439,7 +449,7 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 				// Cut off before writing anything. Retrying the same request on
 				// a roomier model is exactly the case escalation exists for, and
 				// nothing was emitted, so the retry cannot produce a seam.
-				if a.escalate(fmt.Sprintf("cut off after %d tokens of prompt", usage.Prompt), out) {
+				if a.escalate(forRoom, fmt.Sprintf("cut off after %d tokens of prompt", usage.Prompt), out) {
 					a.messages = a.messages[:len(a.messages)-1]
 					continue
 				}

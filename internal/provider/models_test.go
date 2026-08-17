@@ -79,7 +79,8 @@ func TestListModelsDetailedFindsFree(t *testing.T) {
 // A rate limit has to be distinguishable, because the response is to move to
 // another model rather than to give up.
 func TestRateLimitIsDistinguishable(t *testing.T) {
-	for _, code := range []int{http.StatusTooManyRequests, http.StatusPaymentRequired} {
+	// 402 is handled separately: see TestCreditsAndRateLimitsAreDistinct.
+	for _, code := range []int{http.StatusTooManyRequests} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(code)
 			_, _ = w.Write([]byte(`{"error":{"message":"quota"}}`))
@@ -130,5 +131,36 @@ func TestIsChatModel(t *testing.T) {
 		if got := isChatModel(c.id, c.outputs); got != c.want {
 			t.Errorf("%s: isChatModel(%q, %v) = %v, want %v", c.name, c.id, c.outputs, got, c.want)
 		}
+	}
+}
+
+// A refusal for want of money is not a rate limit, however similar it looks
+// from the outside: waiting clears one and never clears the other.
+func TestCreditsAndRateLimitsAreDistinct(t *testing.T) {
+	cases := []struct {
+		status int
+		want   error
+	}{
+		{http.StatusTooManyRequests, ErrRateLimited},
+		{http.StatusPaymentRequired, ErrNeedsCredits},
+	}
+	for _, c := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(c.status)
+			_, _ = w.Write([]byte(`{"error":{"message":"needs more credits"}}`))
+		}))
+		_, _, err := New(srv.URL, "", "m").Stream(context.Background(), nil, nil, Handler{})
+		if !errors.Is(err, c.want) {
+			t.Errorf("status %d = %v, want %v", c.status, err, c.want)
+		}
+		// And not the other one, or the wrong remedy gets applied.
+		other := ErrRateLimited
+		if c.want == ErrRateLimited {
+			other = ErrNeedsCredits
+		}
+		if errors.Is(err, other) {
+			t.Errorf("status %d also matched %v", c.status, other)
+		}
+		srv.Close()
 	}
 }

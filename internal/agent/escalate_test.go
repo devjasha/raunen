@@ -27,7 +27,7 @@ func drain(ch chan Event) []Event {
 func TestEscalateIsOffUnlessEnabled(t *testing.T) {
 	a := &Agent{ref: "ollama/small", contextTokens: 4096, fallbacks: ladder()}
 	out := make(chan Event, 4)
-	if a.escalate("because", out) {
+	if a.escalate(forFailure, "because", out) {
 		t.Error("escalated with auto-switch off")
 	}
 	if got := drain(out); len(got) != 0 {
@@ -39,7 +39,7 @@ func TestEscalateClimbsAndReports(t *testing.T) {
 	a := &Agent{ref: "ollama/small", contextTokens: 4096, autoSwitch: true, fallbacks: ladder()}
 	out := make(chan Event, 8)
 
-	if !a.escalate("too tight", out) {
+	if !a.escalate(forFailure, "too tight", out) {
 		t.Fatal("did not escalate")
 	}
 	if a.ref != "ollama/medium" || a.contextTokens != 16384 {
@@ -47,7 +47,7 @@ func TestEscalateClimbsAndReports(t *testing.T) {
 	}
 
 	// The undeclared window is allowed: it was put in the ladder deliberately.
-	if !a.escalate("still tight", out) {
+	if !a.escalate(forFailure, "still tight", out) {
 		t.Fatal("did not escalate to the undeclared candidate")
 	}
 	if a.ref != "openrouter/big" {
@@ -55,7 +55,7 @@ func TestEscalateClimbsAndReports(t *testing.T) {
 	}
 
 	// Ladder exhausted.
-	if a.escalate("nowhere left", out) {
+	if a.escalate(forFailure, "nowhere left", out) {
 		t.Error("escalated past the end of the ladder")
 	}
 
@@ -72,8 +72,9 @@ func TestEscalateClimbsAndReports(t *testing.T) {
 	}
 }
 
-// Moving to a model that is no roomier would hit the same ceiling again, so a
-// smaller or equal declared window is skipped.
+// When the move is for room, a model that is no roomier would hit the same
+// ceiling again, so a smaller or equal window is skipped. This does not apply to
+// a move forced by a refusal — see TestEscalateIgnoresSizeWhenRefused.
 func TestEscalateSkipsNonUpgrades(t *testing.T) {
 	a := &Agent{
 		ref: "ollama/medium", contextTokens: 16384, autoSwitch: true,
@@ -84,7 +85,7 @@ func TestEscalateSkipsNonUpgrades(t *testing.T) {
 		},
 	}
 	out := make(chan Event, 4)
-	if !a.escalate("tight", out) {
+	if !a.escalate(forRoom, "tight", out) {
 		t.Fatal("did not escalate")
 	}
 	if a.ref != "ollama/large" {
@@ -163,7 +164,7 @@ func TestEscalationIsPreferredOverTrimming(t *testing.T) {
 	out := make(chan Event, 8)
 	// The loop escalates while it would otherwise trim.
 	for a.wouldTrim() {
-		if !a.escalate("context full", out) {
+		if !a.escalate(forFailure, "context full", out) {
 			break
 		}
 	}
@@ -199,7 +200,7 @@ func TestTrimmingRemainsTheLastResort(t *testing.T) {
 
 	out := make(chan Event, 8)
 	for a.wouldTrim() {
-		if !a.escalate("context full", out) {
+		if !a.escalate(forFailure, "context full", out) {
 			break
 		}
 	}
@@ -215,4 +216,35 @@ func TestTrimmingRemainsTheLastResort(t *testing.T) {
 	if !trimmed {
 		t.Error("nothing was trimmed and there was nowhere to escalate")
 	}
+}
+
+// A refusal makes size irrelevant. Insisting on a larger window here left a
+// whole ladder unused: a model with a 1048576 window was refused for want of
+// credits, and every free rung at 1000000 was skipped for being "too small",
+// so the turn failed with somewhere perfectly good to go.
+func TestEscalateIgnoresSizeWhenRefused(t *testing.T) {
+	a := &Agent{
+		ref: "openrouter/paid", contextTokens: 1_048_576, autoSwitch: true,
+		fallbacks: []Candidate{{Ref: "openrouter/free", Context: 1_000_000}},
+	}
+
+	out := make(chan Event, 4)
+	if !a.escalate(forFailure, "needs credits", out) {
+		t.Fatal("did not escalate to a slightly smaller model after a refusal")
+	}
+	if a.ref != "openrouter/free" {
+		t.Errorf("model = %s, want openrouter/free", a.ref)
+	}
+	drain(out)
+
+	// The same ladder is correctly refused when the problem really is room.
+	b := &Agent{
+		ref: "openrouter/paid", contextTokens: 1_048_576, autoSwitch: true,
+		fallbacks: []Candidate{{Ref: "openrouter/free", Context: 1_000_000}},
+	}
+	out2 := make(chan Event, 4)
+	if b.escalate(forRoom, "context full", out2) {
+		t.Error("escalated to a smaller window when the problem was room")
+	}
+	drain(out2)
 }

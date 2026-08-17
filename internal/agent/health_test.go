@@ -122,7 +122,7 @@ func TestEscalateSkipsUnhealthyRungs(t *testing.T) {
 	a.hp().LockOut("nvidia/broken", "rejected")
 
 	out := make(chan Event, 4)
-	if !a.escalate("out of room", out) {
+	if !a.escalate(forFailure, "out of room", out) {
 		t.Fatal("did not escalate")
 	}
 	if a.ref != "cerebras/good" {

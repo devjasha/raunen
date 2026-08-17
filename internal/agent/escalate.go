@@ -30,6 +30,21 @@ func (a *Agent) Held() []Note {
 // model runs out of room.
 func (a *Agent) Ladder() []Candidate { return a.fallbacks }
 
+// why a move is being made, which decides what counts as an acceptable
+// destination. It is passed explicitly rather than inferred from the reason
+// text, which was fragile: rewording a message silently changed the routing.
+type escalateWhy int
+
+const (
+	// forRoom means the conversation no longer fits. Only a larger window helps,
+	// so a smaller or equal one is no use.
+	forRoom escalateWhy = iota
+	// forFailure means the current model refused — rate limited, out of credits,
+	// rejected, unreachable. Size is beside the point: any model that answers is
+	// better than one that will not.
+	forFailure
+)
+
 // SetFallbacks installs the escalation ladder. It is tried in order, so larger
 // contexts belong later in the list.
 func (a *Agent) SetFallbacks(c []Candidate) { a.fallbacks = c }
@@ -41,7 +56,7 @@ func (a *Agent) SetFallbacks(c []Candidate) { a.fallbacks = c }
 // A candidate with no declared context is allowed through: the user put it in
 // the ladder deliberately, and hosted models usually have room. Ordering is
 // treated as the user's intent rather than second-guessed.
-func (a *Agent) nextCandidate() (Candidate, bool) {
+func (a *Agent) nextCandidate(why escalateWhy) (Candidate, bool) {
 	for i, c := range a.fallbacks {
 		if i < a.rung {
 			continue
@@ -53,9 +68,11 @@ func (a *Agent) nextCandidate() (Candidate, bool) {
 		if ok, _ := a.hp().Available(c.Ref); !ok {
 			continue
 		}
-		// A smaller window is pointless when the problem is room — but when the
-		// problem is a rate limit, any model that answers is an improvement.
-		if !a.rateLimited && c.Context > 0 && a.contextTokens > 0 && c.Context <= a.contextTokens {
+		// A smaller window is pointless when the problem is room. When the
+		// problem is a refusal it is irrelevant, and insisting on a larger one
+		// leaves a whole ladder unused: a 1M model that will not answer is
+		// worse than a 1M model that will.
+		if why == forRoom && c.Context > 0 && a.contextTokens > 0 && c.Context <= a.contextTokens {
 			continue
 		}
 		return c, true
@@ -65,16 +82,15 @@ func (a *Agent) nextCandidate() (Candidate, bool) {
 
 // escalate moves to the next model, reporting why. It returns false when the
 // ladder is exhausted, which leaves the caller to fail in the ordinary way.
-func (a *Agent) escalate(reason string, out chan<- Event) bool {
+func (a *Agent) escalate(why escalateWhy, reason string, out chan<- Event) bool {
 	if !a.autoSwitch {
 		return false
 	}
-	c, ok := a.nextCandidate()
+	c, ok := a.nextCandidate(why)
 	if !ok {
 		return false
 	}
 
-	a.rateLimited = reason == "rate limited"
 	from := a.ref
 	// Advance past this rung so a turn cannot loop between two models.
 	for i, x := range a.fallbacks {
