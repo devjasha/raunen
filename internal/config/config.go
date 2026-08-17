@@ -71,6 +71,29 @@ type Config struct {
 	Models map[string]ModelConfig `json:"models"`
 	// System overrides the built-in system prompt when non-empty.
 	System string `json:"system,omitempty"`
+
+	// file is where this config was read from, so it can be written back.
+	file string `json:"-"`
+}
+
+// SetKey stores an API key for a provider and writes the config out. The key
+// lives in the file from then on, which is why Save tightens its permissions.
+func (c *Config) SetKey(name, key string) error {
+	p, ok := c.Providers[name]
+	if !ok {
+		return fmt.Errorf("unknown provider %q", name)
+	}
+	p.APIKey = key
+	c.Providers[name] = p
+	return c.Save()
+}
+
+// Save writes the config back where it was read from.
+func (c *Config) Save() error {
+	if c.file == "" {
+		c.file = Path()
+	}
+	return save(c.file, c)
 }
 
 // SubagentsEnabled reports whether delegation is on, defaulting to on when the
@@ -209,6 +232,7 @@ func Load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		c := defaults()
+		c.file = path
 		if err := save(path, c); err != nil {
 			return nil, err
 		}
@@ -224,6 +248,7 @@ func Load(path string) (*Config, error) {
 	if c.Providers == nil {
 		c.Providers = map[string]Provider{}
 	}
+	c.file = path
 	// Merge in any provider added to the defaults since this file was written,
 	// so an existing config picks up new endpoints without being rewritten.
 	// Only entirely absent names are added: anything the user has edited is
@@ -244,5 +269,19 @@ func save(path string, c *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	tmp := path + ".tmp"
+	// 0600, not 0644: this file can hold API keys, and a personal config has no
+	// reason to be readable by anyone else either way.
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	// WriteFile only applies its mode when it creates the file, so an existing
+	// config keeps whatever it had — which for anything written before keys
+	// were storable is 0644. Set it explicitly.
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return err
+	}
+	// Renamed into place so an interrupted write cannot truncate a working
+	// config, and so the key is never briefly visible in a half-written file.
+	return os.Rename(tmp, path)
 }

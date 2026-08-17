@@ -89,9 +89,14 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 		system:        subSystem,
 		mode:          a.mode,
 		contextTokens: a.contextTokens,
-		ref:           a.ref,
-		depth:         a.depth + 1,
-		messages:      []provider.Message{{Role: provider.System, Content: subSystem + a.mode.guidance()}},
+		// Shared, not copied: what the child learns about a failing endpoint
+		// should spare the caller from finding out again.
+		health:     a.health,
+		fallbacks:  a.fallbacks,
+		autoSwitch: a.autoSwitch,
+		ref:        a.ref,
+		depth:      a.depth + 1,
+		messages:   []provider.Message{{Role: provider.System, Content: subSystem + a.mode.guidance()}},
 	}
 
 	events := make(chan Event, 64)

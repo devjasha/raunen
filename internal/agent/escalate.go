@@ -21,6 +21,11 @@ type Switched struct {
 
 func (Switched) event() {}
 
+// Held reports what the ladder is currently holding back, and why.
+func (a *Agent) Held() []Note {
+	return a.hp().Held()
+}
+
 // Ladder reports the escalation ladder, for showing what will happen when this
 // model runs out of room.
 func (a *Agent) Ladder() []Candidate { return a.fallbacks }
@@ -42,6 +47,10 @@ func (a *Agent) nextCandidate() (Candidate, bool) {
 			continue
 		}
 		if c.Ref == a.ref {
+			continue
+		}
+		// Skip what is known to be failing rather than rediscovering it.
+		if ok, _ := a.hp().Available(c.Ref); !ok {
 			continue
 		}
 		// A smaller window is pointless when the problem is room — but when the

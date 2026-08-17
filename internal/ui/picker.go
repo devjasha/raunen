@@ -43,6 +43,10 @@ const (
 	// pickerRows is how many models are visible at once. Small enough to read
 	// as a popup rather than a second screen.
 	pickerRows = 8
+	// addKeyPrefix marks an entry that opens the key prompt rather than
+	// switching model. It reads as a sentence in the list and still matches the
+	// provider name when filtering.
+	addKeyPrefix = "⊕ add a key for "
 )
 
 var (
@@ -79,6 +83,13 @@ func fetchModels(cfg *config.Config) tea.Cmd {
 					// An endpoint that is not running is ordinary, not fatal:
 					// note it and carry on with whatever else answered.
 					errs = append(errs, name)
+					// A catalogue that needs a key cannot be listed without
+					// one, so those providers would vanish from the chooser
+					// entirely — and adding the key is exactly what the user
+					// came here to do. Offer that instead of nothing.
+					if p.APIKeyEnv != "" && p.Key() == "" {
+						all = append(all, addKeyPrefix+name)
+					}
 					return
 				}
 				if p.APIKeyEnv != "" && p.Key() == "" {
@@ -93,6 +104,7 @@ func fetchModels(cfg *config.Config) tea.Cmd {
 
 		sort.Strings(all)
 		if len(all) == 0 {
+			sort.Strings(errs)
 			return modelsMsg{err: fmt.Errorf("no models found (unreachable: %s)",
 				strings.Join(errs, ", "))}
 		}

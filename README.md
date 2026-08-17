@@ -206,12 +206,69 @@ raunen -version                     # print the version
 | `/model <provider/model>` | switch directly |
 | `/status` | model, context, ladder and endpoints on one screen |
 | `/providers` | list configured endpoints |
+| `/key <provider>` | add an API key |
 | `/sessions` | list saved sessions |
 | `/resume <id>` | pick up a saved session |
 | `/clear` | start a new session, keeping the old one |
 | `task` (tool) | the model delegates to a sub-agent |
 | `/help` | show this |
 | `/quit` | exit |
+
+## Resilience
+
+A ladder is only useful if it remembers what just failed. Otherwise a
+rate-limited model is retried every turn, fails every turn, and each one pays
+the same tax. Three layers, because failures differ in what they imply:
+
+| Failure | Response |
+|---|---|
+| `429`/`402` rate limit | cool that model down, 30s doubling to 15 minutes |
+| connection refused, `5xx` | after 3 in a row, take the whole endpoint out for 2 minutes |
+| `400`/`404` model rejected | lock that model out for the session |
+
+The distinctions are the point. A quota clears on its own, so waiting works. A
+model name that does not exist never will, so waiting is pure cost. And a server
+that is down takes its other models with it — trying them one by one only spends
+time discovering that.
+
+A request that succeeds clears the cooldown and the endpoint's failure count,
+so one blip does not suppress a good model.
+
+Sub-agents share the tracker with their caller: what one learns about a failing
+endpoint spares the other from finding out again.
+
+`/status` shows what is being held back, which is why a ladder can look shorter
+than it is:
+
+```
+held back 2 models
+          groq/llama-3.3-70b  ·  cooling down for 1m30s
+          nvidia/typo         ·  locked out: the endpoint rejected it
+```
+
+## API keys
+
+Choosing a model whose provider has no key would otherwise fail with a `401` a
+few seconds later, by which time the moment has passed. Instead a prompt opens:
+
+```
+╭──────────────────────────────────────────────────────────────╮
+│ api key for groq  — paste it and press enter                 │
+│ saved to the config, which is written 0600 — or set           │
+│ GROQ_API_KEY instead                                         │
+│ › *********                                                  │
+│ enter to save  ·  esc to cancel                              │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+Input is masked, and the key is written to the config with `0600` permissions.
+An environment variable is still the better place for a secret, which is why the
+prompt names the one this provider reads.
+
+`/key <provider>` opens it directly. Providers whose catalogue cannot be listed
+without a key — Groq and Cerebras answer `401` even for the model list — appear
+in `/model` as `⊕ add a key for groq`, so the chooser is a way in rather than a
+dead end.
 
 ## Modes
 

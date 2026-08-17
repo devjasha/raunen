@@ -112,3 +112,41 @@ func TestLoadMergesNewDefaultProviders(t *testing.T) {
 		t.Errorf("default = %q, want it untouched", c.Default)
 	}
 }
+
+// A config that can hold API keys must not be world-readable. WriteFile only
+// applies its mode when creating a file, so an existing 0644 config would keep
+// those permissions and leak the key.
+func TestSaveTightensPermissionsOnAnExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/config.json"
+
+	// A config from before keys were storable.
+	if err := os.WriteFile(path, []byte(`{"providers":{"groq":{"base_url":"x"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetKey("groq", "secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("permissions = %04o, want 0600 — the key is readable by others", perm)
+	}
+
+	// And it round-trips.
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.Providers["groq"].APIKey; got != "secret" {
+		t.Errorf("api_key = %q, want %q", got, "secret")
+	}
+}

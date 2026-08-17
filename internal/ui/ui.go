@@ -180,6 +180,8 @@ type Model struct {
 	// it mid-turn — it is blocked on a tool result it asked for — so it is held
 	// and sent the moment the turn ends.
 	queued string
+	// keyAsk is the API key prompt, open only while asking.
+	keyAsk *keyPrompt
 	// pick is the model chooser overlay, open only while choosing.
 	pick *picker
 	// ask is a tool call waiting on the user in accept mode. While it is set
@@ -418,6 +420,9 @@ func (m Model) viewHeight() int {
 	if m.pick != nil {
 		h -= m.pick.height()
 	}
+	if m.keyAsk != nil {
+		h -= m.keyAsk.height()
+	}
 	if m.sub != nil {
 		h -= m.sub.height()
 	}
@@ -485,6 +490,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// The key prompt takes the keyboard while it is open.
+	if m.keyAsk != nil {
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			m.keyAsk = nil
+			return *m, nil
+		case "enter":
+			return m.saveKey()
+		}
+		var cmd tea.Cmd
+		m.keyAsk.input, cmd = m.keyAsk.input.Update(msg)
+		return *m, cmd
+	}
+
 	// The model chooser takes the keyboard while it is open.
 	if m.pick != nil {
 		switch msg.String() {
@@ -497,6 +516,21 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if ref := m.pick.selected(); ref != "" {
 				m.pick = nil
+				// The entry that offers to add a key, for a provider whose
+				// catalogue could not be listed without one.
+				if name, ok := strings.CutPrefix(ref, addKeyPrefix); ok {
+					p := m.cfg.Providers[name]
+					k := newKeyPrompt(name, p.APIKeyEnv, "")
+					k.reopen = true
+					m.keyAsk = k
+					return *m, nil
+				}
+				// A model whose provider has no key would fail with a 401 a few
+				// seconds from now. Ask while the intent is still fresh.
+				if name, env, needs := m.needsKey(ref); needs {
+					m.keyAsk = newKeyPrompt(name, env, ref)
+					return *m, nil
+				}
 				return m.switchModel(ref)
 			}
 			m.pick = nil
@@ -505,6 +539,10 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.pick.filter = m.pick.filter[:n-1]
 				m.pick.apply()
 			}
+		case "space":
+			// Reported by name rather than as a rune, so it needs saying.
+			m.pick.filter += " "
+			m.pick.apply()
 		default:
 			// Anything printable narrows the list.
 			if r := []rune(msg.String()); len(r) == 1 {
@@ -600,6 +638,47 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return *m, cmd
+}
+
+// needsKey reports whether a reference's provider wants a key it does not have.
+func (m Model) needsKey(ref string) (name, env string, needs bool) {
+	p, _, err := m.cfg.Resolve(ref)
+	if err != nil {
+		return "", "", false
+	}
+	name, _, _ = strings.Cut(ref, "/")
+	if p.APIKeyEnv != "" && p.Key() == "" {
+		return name, p.APIKeyEnv, true
+	}
+	return name, p.APIKeyEnv, false
+}
+
+// saveKey stores what was typed and carries on to whatever wanted it.
+func (m *Model) saveKey() (tea.Model, tea.Cmd) {
+	key := strings.TrimSpace(m.keyAsk.input.Value())
+	if key == "" {
+		m.keyAsk.err = "nothing entered"
+		return *m, nil
+	}
+	if err := m.cfg.SetKey(m.keyAsk.provider, key); err != nil {
+		m.keyAsk.err = err.Error()
+		return *m, nil
+	}
+
+	name, then, reopen := m.keyAsk.provider, m.keyAsk.then, m.keyAsk.reopen
+	m.keyAsk = nil
+	m.add(okStyle.Render("✓ saved a key for "+name) +
+		dimStyle.Render("  in "+shortRoot(config.Path())))
+	if then != "" {
+		return m.switchModel(then)
+	}
+	if reopen {
+		// The key was added to get at those models, so go back to the list —
+		// refetched, since the catalogue should now answer.
+		m.pick = &picker{loading: true}
+		return *m, fetchModels(m.cfg)
+	}
+	return *m, nil
 }
 
 // switchModel points the agent at a different model, keeping the conversation.
@@ -821,6 +900,15 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		})
 		return *m, next
 
+	case agent.Tripped:
+		m.push(entry{
+			first: "  " + askStyle.Render("⚠ "),
+			cont:  "    ",
+			text: askStyle.Render(e.Provider+" taken out of rotation") +
+				dimStyle.Render(fmt.Sprintf("  — repeated failures, retrying in %s", e.For)),
+		})
+		return *m, next
+
 	case agent.Trimmed:
 		m.add(dimStyle.Render(fmt.Sprintf(
 			"⋯ dropped %d earlier messages to fit the context", e.Messages)))
@@ -963,6 +1051,20 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		}
 		return m.switchModel(fields[1])
 
+	case "/key":
+		if len(fields) < 2 {
+			m.add(errStyle.Render("✗ /key needs a provider — see /providers"))
+			return *m, nil
+		}
+		name := fields[1]
+		p, ok := m.cfg.Providers[name]
+		if !ok {
+			m.add(errStyle.Render("✗ unknown provider: " + name))
+			return *m, nil
+		}
+		m.keyAsk = newKeyPrompt(name, p.APIKeyEnv, "")
+		return *m, nil
+
 	case "/status":
 		m.status()
 		return *m, probeProviders(m.cfg)
@@ -979,6 +1081,7 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 			"  /model <provider/model>  switch directly",
 			"  /status                  model, context, ladder, endpoints",
 			"  /providers               list configured endpoints",
+			"  /key <provider>          add an api key",
 			"  /clear                   start a new session",
 			"  /sessions                list saved sessions",
 			"  /resume <id>             pick up a saved session",
@@ -1019,6 +1122,9 @@ func (m Model) View() tea.View {
 	}
 	if m.pick != nil {
 		rows = append(rows, strings.Split(m.pick.render(m.innerWidth(), m.ref), "\n")...)
+	}
+	if m.keyAsk != nil {
+		rows = append(rows, strings.Split(m.keyAsk.render(m.innerWidth()), "\n")...)
 	}
 
 	// The status row is always present, blank when idle, so the layout below
@@ -1075,6 +1181,20 @@ func (m Model) View() tea.View {
 
 	// The cursor is positioned relative to the input widget; shift it past the
 	// transcript, the status row, the bar and the border.
+	// While the key prompt is open the cursor belongs in it, not in the input.
+	if m.keyAsk != nil {
+		if cur := m.keyAsk.input.Cursor(); cur != nil {
+			// Past the transcript and status row, the prompt's own border, and
+			// the two heading rows inside it.
+			cur.Y += m.viewHeight() + 1 + 3
+			if m.sub != nil {
+				cur.Y += m.sub.height()
+			}
+			cur.X += boxPadX + 1 + padX
+			v.Cursor = cur
+		}
+		return v
+	}
 	if cur := m.input.Cursor(); cur != nil {
 		// Past the transcript, the status row and the input's top border.
 		below := m.viewHeight() + 2

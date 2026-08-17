@@ -169,18 +169,38 @@ func (c *Client) Stream(ctx context.Context, msgs []Message, tools []ToolSchema,
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return Message{}, usage, fmt.Errorf("%s: %w", c.BaseURL, err)
+		// The request never landed, so this is the endpoint rather than the
+		// model — unless the caller cancelled, which is not a failure at all.
+		if ctx.Err() != nil {
+			return Message{}, usage, err
+		}
+		return Message{}, usage, fmt.Errorf("%w: %s: %v", ErrUnavailable, c.BaseURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		msg := strings.TrimSpace(string(b))
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusPaymentRequired {
+		switch {
+		case resp.StatusCode == http.StatusTooManyRequests,
+			resp.StatusCode == http.StatusPaymentRequired:
 			// Free tiers refuse like this when a quota runs out. Another model
 			// may well answer, so this is marked as worth retrying elsewhere.
 			return Message{}, usage, fmt.Errorf("%w: %s returned %s: %s",
 				ErrRateLimited, c.BaseURL, resp.Status, msg)
+
+		case resp.StatusCode == http.StatusNotFound,
+			resp.StatusCode == http.StatusBadRequest,
+			resp.StatusCode == http.StatusUnprocessableEntity:
+			// The model was rejected rather than the request throttled: a name
+			// that does not exist, or a request it cannot serve. Waiting will
+			// not help.
+			return Message{}, usage, fmt.Errorf("%w: %s returned %s: %s",
+				ErrModelInvalid, c.BaseURL, resp.Status, msg)
+
+		case resp.StatusCode >= 500:
+			return Message{}, usage, fmt.Errorf("%w: %s returned %s: %s",
+				ErrUnavailable, c.BaseURL, resp.Status, msg)
 		}
 		return Message{}, usage, fmt.Errorf("%s returned %s: %s", c.BaseURL, resp.Status, msg)
 	}
@@ -274,13 +294,13 @@ func (c *Client) Stream(ctx context.Context, msgs []Message, tools []ToolSchema,
 	if err := sc.Err(); err != nil {
 		return out, usage, err
 	}
-	if !sawEnd {
+	if !sawEnd && ctx.Err() == nil {
 		// Report it rather than returning a half-built message: a truncated
 		// stream otherwise surfaces as the model having replied with nothing,
 		// which sends you looking at the model instead of the connection.
 		return out, usage, fmt.Errorf(
-			"%s: connection closed mid-response (the server may have run out of memory or restarted)",
-			c.BaseURL)
+			"%w: %s closed the connection mid-response (it may have run out of memory or restarted)",
+			ErrUnavailable, c.BaseURL)
 	}
 
 	if rest := strip.Flush(); rest != "" {
@@ -311,10 +331,19 @@ type ModelInfo struct {
 	Free    bool
 }
 
-// ErrRateLimited marks a refusal that another model might not hit. It is worth
-// distinguishing because the response is to move on rather than to give up,
-// which is the whole point of a ladder of free models.
-var ErrRateLimited = errors.New("rate limited")
+// Failures are classified because the right response differs. A rate limit
+// clears on its own and is worth retrying later; a bad model name never will be;
+// a server that is down affects every model behind it, not just this one.
+var (
+	// ErrRateLimited is a quota or throughput refusal. Wait, then retry.
+	ErrRateLimited = errors.New("rate limited")
+	// ErrModelInvalid means this model will not work — wrong name, unsupported
+	// request. Retrying it is pointless however long you wait.
+	ErrModelInvalid = errors.New("model unusable")
+	// ErrUnavailable is the endpoint failing rather than the model: a refused
+	// connection, a timeout, a 5xx. Everything behind it is suspect.
+	ErrUnavailable = errors.New("endpoint unavailable")
+)
 
 // ListModelsDetailed asks an endpoint what it serves, keeping the pricing and
 // context it reports. OpenRouter returns both; endpoints that do not simply

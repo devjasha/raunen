@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,8 +34,14 @@ func TestStreamTruncatedIsAnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("truncated stream returned no error")
 	}
-	if !strings.Contains(err.Error(), "closed mid-response") {
+	if !strings.Contains(err.Error(), "closed the connection mid-response") {
 		t.Errorf("error = %q, want it to name the dropped connection", err)
+	}
+	// Classified as the endpoint failing, not the model: everything behind it
+	// is suspect, so a ladder should not just try the next model on the same
+	// unreachable server.
+	if !errors.Is(err, ErrUnavailable) {
+		t.Errorf("error = %v, want it classified as ErrUnavailable", err)
 	}
 	_ = msg
 }

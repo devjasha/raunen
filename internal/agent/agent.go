@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"raunen/internal/provider"
 	"raunen/internal/tools"
@@ -68,6 +69,13 @@ type Approval struct {
 	Reply chan bool
 }
 
+// Tripped reports that an endpoint has been taken out of rotation after
+// repeated failures.
+type Tripped struct {
+	Provider string
+	For      time.Duration
+}
+
 // Trimmed reports that old exchanges were dropped to keep the request inside
 // the model's context window.
 type Trimmed struct{ Messages int }
@@ -87,6 +95,7 @@ func (Usage) event()          {}
 func (Approval) event()       {}
 func (ModeChanged) event()    {}
 func (Trimmed) event()        {}
+func (Tripped) event()        {}
 func (TaskStart) event()      {}
 func (TaskEnd) event()        {}
 func (TurnEnd) event()        {}
@@ -118,6 +127,9 @@ type Agent struct {
 	// rateLimited records that the last move was forced by a refusal rather
 	// than by running out of room, which changes what counts as an upgrade.
 	rateLimited bool
+	// health remembers what has recently failed, so the same dead end is not
+	// walked into every turn. Shared with sub-agents by pointer.
+	health *health
 	// schemaTokens is what the tool definitions cost on every request. They are
 	// not part of the message list but they are very much part of the prompt:
 	// leaving them out understates a small model's usage by hundreds of tokens.
@@ -137,6 +149,7 @@ func New(c *provider.Client, r *tools.Registry, system string) *Agent {
 	return &Agent{
 		client:   c,
 		tools:    r,
+		health:   newHealth(),
 		system:   system,
 		messages: []provider.Message{{Role: provider.System, Content: system}},
 	}
@@ -342,17 +355,33 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			out <- Usage{usage}
 		}
 		if err != nil {
-			// A rate limit is a routing decision, not a dead end: a free tier
-			// that has run out says nothing about whether the next model will.
-			if errors.Is(err, provider.ErrRateLimited) &&
-				a.escalate("rate limited", out) {
-				continue
+			// Record what this failure means before deciding what to do, so the
+			// next turn does not have to learn it again.
+			switch {
+			case errors.Is(err, provider.ErrRateLimited):
+				wait := a.hp().RateLimited(a.ref)
+				if a.escalate(fmt.Sprintf("rate limited, resting %s", wait.Round(time.Second)), out) {
+					continue
+				}
+			case errors.Is(err, provider.ErrModelInvalid):
+				a.hp().LockOut(a.ref, "the endpoint rejected it")
+				if a.escalate("model rejected by the endpoint", out) {
+					continue
+				}
+			case errors.Is(err, provider.ErrUnavailable):
+				if a.hp().Unavailable(a.ref) {
+					out <- Tripped{Provider: providerOf(a.ref), For: breakerCooldown}
+				}
+				if a.escalate("endpoint unavailable", out) {
+					continue
+				}
 			}
 			// Keep the partial assistant message out of the transcript on
 			// failure; a half-written turn confuses the next request.
 			out <- Failed{Err: err}
 			return
 		}
+		a.hp().Succeeded(a.ref)
 		a.messages = append(a.messages, msg)
 
 		if len(msg.ToolCalls) == 0 {

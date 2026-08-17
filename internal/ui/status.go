@@ -18,6 +18,9 @@ import (
 // Version is stamped by main so /status can report it.
 var Version = "dev"
 
+// indent lines up continuation rows under the value column of a status row.
+const indent = "            "
+
 // providerStatus is what a probe found at one endpoint.
 type providerStatus struct {
 	name   string
@@ -153,6 +156,20 @@ func (m *Model) status() {
 		}
 	}
 
+	// What is being held back explains a ladder that looks shorter than it is.
+	if held := m.ag.Held(); len(held) > 0 {
+		row("held back", askStyle.Render(fmt.Sprintf("%d models", len(held))))
+		for i, n := range held {
+			if i == 3 {
+				m.push(entry{first: indent, cont: indent,
+					text: dimStyle.Render(fmt.Sprintf("… and %d more", len(held)-3))})
+				break
+			}
+			m.push(entry{first: indent, cont: indent + "  ",
+				text: dimStyle.Render(n.Ref + "  ·  " + n.Reason)})
+		}
+	}
+
 	subs := "off"
 	if m.cfg.SubagentsEnabled() {
 		subs = "on"
@@ -167,7 +184,6 @@ func (m *Model) status() {
 // so the URL is what gets truncated on a narrow terminal rather than the
 // reason a provider is not working.
 func (m *Model) showProviders(list []providerStatus) {
-	const indent = "            "
 	for _, p := range list {
 		state, note := okStyle.Render(fmt.Sprintf("%d models", p.models)), ""
 		switch {
