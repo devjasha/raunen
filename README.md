@@ -194,7 +194,7 @@ raunen -version                     # print the version
 | `enter` | send |
 | `shift+enter` / `alt+enter` | newline without sending |
 | `tab` | cycle auto / accept edits / plan |
-| `esc` | cancel the running turn |
+| `esc` | cancel the running turn, or drop a pending reply |
 | `ctrl+c` | cancel if working, otherwise quit |
 | `pgup` / `pgdn` | scroll the transcript |
 | `shift+↑` / `shift+↓` | scroll by a line |
@@ -829,6 +829,22 @@ room. Ordering is treated as intent rather than second-guessed.
 Each turn starts at the bottom of the ladder again, so a short question does not
 inherit the expensive model just because an earlier one needed it. Escalation
 never goes back down within a conversation.
+
+## Cancelling
+
+`esc` stops the turn, including anything a sub-agent is doing and any command
+either of them is running.
+
+Getting that right took more than passing a context around. A command runs in its
+own process group and the whole group is signalled, because killing the shell
+leaves its children alive holding the output pipe — and reading that pipe then
+blocks on an EOF that never comes. `esc` during an `npx install` appeared to do
+nothing at all until the install finished on its own. Measured, the difference is
+a command that releases in 300ms rather than one that never releases.
+
+`esc` also drops a pending reply, but only when nothing is running: stopping the
+agent is what the key is for, and after clicking a message mid-turn the first
+press otherwise looked like it had been ignored.
 
 ## Sub-agents
 

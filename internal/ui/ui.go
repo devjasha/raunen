@@ -701,14 +701,14 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return *m, tea.Quit
 
 	case "esc":
-		// A pending reply is the nearest thing to undo, so it goes first.
-		if m.replyTo != "" {
-			m.replyTo = ""
-			return *m, nil
-		}
+		// Stopping the agent comes first. A pending reply also clears on esc,
+		// but if a turn is running that is not what the key is for — and having
+		// clicked a message mid-turn, the first esc appeared to do nothing.
 		if m.busy {
 			m.cancel()
+			return *m, nil
 		}
+		m.replyTo = ""
 		return *m, nil
 
 	case "ctrl+d":

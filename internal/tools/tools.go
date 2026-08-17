@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"raunen/internal/provider"
@@ -179,7 +180,30 @@ func Default(root string, maxOutput int) *Registry {
 
 			cmd := exec.CommandContext(ctx, "bash", "-c", a.Command)
 			cmd.Dir = root
+			// Killing the shell is not enough. Its children inherit the output
+			// pipe, so reading it blocks on an EOF that never comes while they
+			// live — cancelling a `npx install` left the turn hanging until the
+			// install finished on its own.
+			//
+			// So the command gets its own process group and the whole group is
+			// signalled, and WaitDelay bounds the wait in case something still
+			// clings to the pipe.
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Cancel = func() error {
+				if cmd.Process == nil {
+					return nil
+				}
+				// Negative pid means the process group.
+				return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+			cmd.WaitDelay = 2 * time.Second
+
 			out, err := cmd.CombinedOutput()
+			if ctx.Err() == context.Canceled {
+				// Cancelled by the user; whatever was captured is not worth
+				// handing to the model as a result.
+				return "", ctx.Err()
+			}
 			if ctx.Err() == context.DeadlineExceeded {
 				return truncate(string(out)) + "\n[timed out]", nil
 			}
