@@ -107,20 +107,7 @@ func run() error {
 
 	// Tool results are capped relative to the model's context, so a single read
 	// cannot evict the conversation around it.
-	// A declared window wins; otherwise ask the endpoint, which for gateways
-	// like OpenRouter knows the answer already.
-	window := cfg.ModelContext(ref)
-	if window == 0 {
-		window = discoverContext(p, model)
-	}
-	if window == 0 {
-		// Ollama does not report a window over the OpenAI endpoint, and it is
-		// the runtime most likely to be serving a smaller one than you expect.
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		window = provider.OllamaContext(ctx, p.BaseURL, model)
-		cancel()
-	}
-	window = firstNonZero(window, cfg.ProviderContext(ref))
+	window := windowFor(cfg, p, ref, model)
 
 	reg := tools.Default(root, tools.OutputBudget(window))
 	ag := agent.New(provider.New(p.BaseURL, p.Key(), model), reg, cfg.System)
@@ -214,7 +201,7 @@ func fallbacks(cfg *config.Config) []agent.Candidate {
 		out = append(out, agent.Candidate{
 			Ref:     ref,
 			Client:  provider.New(p.BaseURL, p.Key(), model),
-			Context: cfg.ContextFor(ref),
+			Context: windowFor(cfg, p, ref, model),
 		})
 	}
 	if cfg.FreeFallback {
@@ -316,6 +303,26 @@ func firstNonZero(vals ...int) int {
 		}
 	}
 	return 0
+}
+
+// windowFor works out a model's context window: what was declared for it, then
+// what the endpoint reports, then what its native API says, then the provider's
+// default. Shared so the model in use and every rung of the ladder are measured
+// the same way — a rung with no window cannot be judged an upgrade, which is how
+// a perfectly good fallback ends up looking useless.
+func windowFor(cfg *config.Config, p config.Provider, ref, model string) int {
+	if w := cfg.ModelContext(ref); w > 0 {
+		return w
+	}
+	if w := discoverContext(p, model); w > 0 {
+		return w
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if w := provider.OllamaContext(ctx, p.BaseURL, model); w > 0 {
+		return w
+	}
+	return cfg.ProviderContext(ref)
 }
 
 // discoverContext asks an endpoint how big a model's window is, for providers

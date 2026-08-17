@@ -610,10 +610,48 @@ It reports `context_length` per model, so windows are discovered rather than
 declared — `auto/best-coding` comes through as 1,048,576 tokens and the usage bar
 works without any configuration.
 
-It is deliberately **not** marked `"free": true`. A gateway routes to whatever it
-has been given, which may include paid providers, so raunen will not claim its
-models cost nothing. If yours only has free providers configured, add the flag
-and its catalogue joins the fallback ladder.
+It carries no `"free": true` flag, but it does not need one: anything served from
+`localhost` is treated as costing nothing, a gateway included. That is what puts
+its catalogue on the fallback ladder, and it is the point of running one — a
+gateway with subscriptions attached is exactly what a small local model should
+escalate into.
+
+Be aware of the assumption, though. A gateway can route to paid providers, and
+raunen cannot see which side of that line a request lands on. If yours bills you,
+keep it off the ladder with `"free_fallback": false` and name your rungs
+explicitly in `fallback`.
+
+### Local first, subscription when it matters
+
+The arrangement worth copying, and the one this was built for:
+
+```json
+{
+  "default": "ollama/qwen3.5-8k:latest",
+  "auto_switch": true,
+  "fallback": ["omniroute/auto/best-coding"]
+}
+```
+
+Everything runs on the local model — free, unmetered, private — until a
+conversation outgrows its window, at which point it moves to a 1M-token model
+without dropping anything it has already found:
+
+```
+auto · ⎇ main · qwen3.5-8k:latest
+
+    ⏺ read  README.md          ↳ 210 lines
+    ⏺ read  internal/ui/ui.go  ↳ 196 lines
+
+  The UI is a terminal user interface that takes the alternate screen …
+
+    ⇅ switched to omniroute/auto/best-coding  — context full at 8192 tokens
+
+auto · ⎇ main · auto/best-coding · ░░░░░░░░░░ 0% · 5.9k
+```
+
+That is the whole design in one exchange: cheapest thing that works, a bigger one
+only when the work demands it, and no memory lost in between.
 
 ### Cloud models
 
