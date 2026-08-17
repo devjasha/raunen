@@ -713,6 +713,20 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.pick.move(-1)
 		case "down", "ctrl+n":
 			m.pick.move(1)
+		case "ctrl+f":
+			// Pin or unpin what is highlighted without leaving the list, so a
+			// handful of models can be marked in one pass.
+			if ref := m.pick.selected(); ref != "" {
+				if err := m.cfg.ToggleFavourite(ref); err != nil {
+					m.add(errStyle.Render("✗ could not update favourites: " + err.Error()))
+				} else {
+					// Re-float so a freshly pinned model jumps to the top and an
+					// unpinned one drops back into the alphabetical list.
+					m.pick.all = sortFavourites(m.pick.all, m.cfg.Favourites)
+					m.pick.apply()
+				}
+			}
+			return *m, nil
 		case "enter":
 			if ref := m.pick.selected(); ref != "" {
 				m.pick = nil
@@ -915,7 +929,7 @@ func (m *Model) saveKey() (tea.Model, tea.Cmd) {
 	if reopen {
 		// The key was added to get at those models, so go back to the list —
 		// refetched, since the catalogue should now answer.
-		m.pick = &picker{loading: true}
+		m.pick = &picker{loading: true, cfg: m.cfg}
 		return *m, fetchModels(m.cfg)
 	}
 	return *m, nil
@@ -1398,10 +1412,36 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 	case "/model":
 		if len(fields) < 2 {
 			// No argument: offer what the endpoints actually serve.
-			m.pick = &picker{loading: true}
+			m.pick = &picker{loading: true, cfg: m.cfg}
 			return *m, fetchModels(m.cfg)
 		}
 		return m.switchModel(fields[1])
+
+	case "/favourite", "/fav":
+		ref := m.ref
+		if len(fields) >= 2 {
+			// A named reference must resolve before it is worth pinning; an
+			// unresolvable one would silently do nothing useful in /model.
+			if _, _, err := m.cfg.Resolve(fields[1]); err != nil {
+				m.add(errStyle.Render("✗ " + err.Error()))
+				return *m, nil
+			}
+			ref = fields[1]
+		}
+		if m.cfg.IsFavourite(ref) {
+			if err := m.cfg.ToggleFavourite(ref); err != nil {
+				m.add(errStyle.Render("✗ could not update favourites: " + err.Error()))
+				return *m, nil
+			}
+			m.add(dimStyle.Render("✗ removed " + ref + " from favourites"))
+			return *m, nil
+		}
+		if err := m.cfg.ToggleFavourite(ref); err != nil {
+			m.add(errStyle.Render("✗ could not update favourites: " + err.Error()))
+			return *m, nil
+		}
+		m.add(okStyle.Render("★ pinned " + ref + " to favourites"))
+		return *m, nil
 
 	case "/key":
 		if len(fields) < 2 {

@@ -69,6 +69,10 @@ type Config struct {
 	// Models holds per-model settings, keyed by "provider/model". Anything not
 	// listed falls back to its provider.
 	Models map[string]ModelConfig `json:"models"`
+	// Favourites are "provider/model" references the user has pinned for quick
+	// access, in the order they were first pinned. They surface at the top of
+	// /model and are toggled with /favourite.
+	Favourites []string `json:"favourites,omitempty"`
 	// System overrides the built-in system prompt when non-empty.
 	System string `json:"system,omitempty"`
 
@@ -120,6 +124,30 @@ func (c *Config) ProviderContext(ref string) int {
 		return p.Context
 	}
 	return 0
+}
+
+// IsFavourite reports whether a reference is pinned. Order does not matter here.
+func (c *Config) IsFavourite(ref string) bool {
+	for _, f := range c.Favourites {
+		if f == ref {
+			return true
+		}
+	}
+	return false
+}
+
+// ToggleFavourite pins a reference if it is not already pinned, or removes it if
+// it is, keeping the remaining pins in their original order. The config is
+// written back so the set is visible and editable in the file, like Default.
+func (c *Config) ToggleFavourite(ref string) error {
+	for i, f := range c.Favourites {
+		if f == ref {
+			c.Favourites = append(c.Favourites[:i], c.Favourites[i+1:]...)
+			return c.Save()
+		}
+	}
+	c.Favourites = append(c.Favourites, ref)
+	return c.Save()
 }
 
 // ContextFor returns the window for a "provider/model" reference: the model's

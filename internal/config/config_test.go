@@ -66,6 +66,50 @@ func TestResolveSplitsOnFirstSlash(t *testing.T) {
 }
 
 // The key may come from the environment so it never has to be written to disk.
+// Favourites pin a reference and unpin it again, and the set is written to the
+// config so it is visible and editable in the file like the default model.
+func TestToggleFavouritePinsAndUnpins(t *testing.T) {
+	dir := t.TempDir()
+	c := &Config{Providers: map[string]Provider{"ollama": {BaseURL: "http://x/v1"}}}
+	c.file = dir + "/config.json"
+
+	if c.IsFavourite("ollama/a") {
+		t.Fatal("nothing pinned yet")
+	}
+	if err := c.ToggleFavourite("ollama/a"); err != nil {
+		t.Fatal(err)
+	}
+	if !c.IsFavourite("ollama/a") {
+		t.Fatal("ollama/a should be pinned")
+	}
+	// Order is preserved across a second pin.
+	if err := c.ToggleFavourite("ollama/b"); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Favourites; len(got) != 2 || got[0] != "ollama/a" || got[1] != "ollama/b" {
+		t.Fatalf("Favourites = %v, want [ollama/a ollama/b]", got)
+	}
+	// Unpinning the first leaves the second, in its place.
+	if err := c.ToggleFavourite("ollama/a"); err != nil {
+		t.Fatal(err)
+	}
+	if c.IsFavourite("ollama/a") {
+		t.Fatal("ollama/a should be unpinned")
+	}
+	if got := c.Favourites; len(got) != 1 || got[0] != "ollama/b" {
+		t.Fatalf("Favourites = %v, want [ollama/b]", got)
+	}
+
+	// The file is written, and the pins round-trip through it.
+	again, err := Load(c.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.Favourites; len(got) != 1 || got[0] != "ollama/b" {
+		t.Fatalf("loaded Favourites = %v, want [ollama/b]", got)
+	}
+}
+
 func TestProviderKeyPrefersEnvironment(t *testing.T) {
 	t.Setenv("RAUNEN_TEST_KEY", "from-env")
 	p := Provider{APIKey: "from-file", APIKeyEnv: "RAUNEN_TEST_KEY"}

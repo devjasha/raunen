@@ -1,11 +1,50 @@
 package ui
 
-import "testing"
+import (
+	"testing"
+
+	"raunen/internal/config"
+)
 
 func withItems(items ...string) *picker {
 	p := &picker{}
 	p.setModels(items)
 	return p
+}
+
+// Pinned models belong at the top of the chooser, where they are actually
+// useful, and everything else keeps its order below them.
+func TestPickerFloatsFavouritesToTop(t *testing.T) {
+	c := &config.Config{Favourites: []string{"groq/llama-3.3-70b-versatile"}}
+	p := &picker{cfg: c}
+	p.setModels([]string{
+		"ollama/qwen3:8b",
+		"openrouter/google/gemma-4-31b-it:free",
+		"groq/llama-3.3-70b-versatile",
+	})
+	want := []string{
+		"groq/llama-3.3-70b-versatile",
+		"ollama/qwen3:8b",
+		"openrouter/google/gemma-4-31b-it:free",
+	}
+	if len(p.all) != len(want) {
+		t.Fatalf("all = %v, want %v", p.all, want)
+	}
+	for i := range want {
+		if p.all[i] != want[i] {
+			t.Errorf("position %d = %q, want %q", i, p.all[i], want[i])
+		}
+	}
+}
+
+// A pin that is not in the list leaves the rest untouched.
+func TestPickerFavouriteNotPresentIsIgnored(t *testing.T) {
+	c := &config.Config{Favourites: []string{"openrouter/absent"}}
+	p := &picker{cfg: c}
+	p.setModels([]string{"ollama/qwen3:8b", "groq/llama-3.3-70b-versatile"})
+	if len(p.all) != 2 {
+		t.Fatalf("all = %v, want the two models untouched", p.all)
+	}
 }
 
 // Model names are long and structured, so matching has to be more forgiving

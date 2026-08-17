@@ -229,6 +229,7 @@ a folder is exactly the sort of thing it is for.
 |---|---|
 | `/model` | choose a model from a list |
 | `/model <provider/model>` | switch directly |
+| `/favourite` | pin or unpin the current model (`/fav`) |
 | `/status` | model, context, ladder and endpoints on one screen |
 | `/companion` | your dragon's level and what fed it |
 | `/providers` | list configured endpoints |
@@ -350,6 +351,46 @@ and on a smaller one it can undo the reason it was switched. Automatic
 escalation is deliberately excluded from all of this: moving to a roomier model
 for one turn is a measure, not a decision, and should not follow you into
 tomorrow.
+
+## Favouriting models
+
+The catalogue runs into the hundreds, and the ones you actually use are a handful.
+`/favourite` pins the current model so it rises to the top of `/model`, and
+running it again on the same model unpins it:
+
+```
+★ pinned ollama/qwen3.5-8k:latest to favourites
+```
+
+`/favourite <provider/model>` pins a named one without switching to it.
+
+**Favourites float to the top of the list.** They are collected above everything
+else, in the order they were pinned, marked with `★` (the `•` still marks the
+model in use). A long, alphabetical catalogue becomes the short list you reach
+for first, with the rest still there beneath:
+
+```
+╭──────────────────────────────────────────────────────────────╮
+│ search ›                                                     │
+│ ★   ollama/qwen3.5-8k:latest                                 │
+│ ★   openrouter/nvidia/nemotron-3.5-lightning:free            │
+│     openrouter/google/gemma-4-26b-a4b-it:free                │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+While the list is open, `ctrl+f` pins or unpins the highlighted model without
+leaving — so you can mark several in one pass. The set is stored under
+`favourites` in the config, written `0600` like everything else there, so it is
+visible and editable:
+
+```json
+{
+  "favourites": ["ollama/qwen3.5-8k:latest"]
+}
+```
+
+Pinning is independent of `default`: a favourite is a shortcut to reach a model,
+not a decision to use it next time.
 
 ## API keys
 

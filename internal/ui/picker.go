@@ -26,6 +26,8 @@ type picker struct {
 	cursor   int
 	loading  bool
 	err      error
+	// cfg lets the list float pinned models to the top and mark them.
+	cfg *config.Config
 }
 
 // modelsMsg carries the result of asking every provider what it has.
@@ -47,6 +49,8 @@ const (
 	// switching model. It reads as a sentence in the list and still matches the
 	// provider name when filtering.
 	addKeyPrefix = "⊕ add a key for "
+	// favMarker marks a pinned model at the top of the chooser.
+	favMarker = "★ "
 )
 
 var (
@@ -112,8 +116,40 @@ func fetchModels(cfg *config.Config) tea.Cmd {
 	}
 }
 
+// sortFavourites moves pinned models above the rest, preserving their order
+// and the relative order of everything else. Where they sit matters: the top
+// of a long list is the place a favourite is actually useful.
+func sortFavourites(models []string, favs []string) []string {
+	if len(favs) == 0 {
+		return models
+	}
+	known := make(map[string]bool, len(favs))
+	for _, f := range favs {
+		known[f] = true
+	}
+	out := make([]string, 0, len(models))
+	for _, f := range favs {
+		for _, m := range models {
+			if m == f {
+				out = append(out, m)
+				break
+			}
+		}
+	}
+	for _, m := range models {
+		if !known[m] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 func (p *picker) setModels(models []string) {
-	p.all = models
+	var favs []string
+	if p.cfg != nil {
+		favs = p.cfg.Favourites
+	}
+	p.all = sortFavourites(models, favs)
 	p.loading = false
 	p.apply()
 }
@@ -251,6 +287,8 @@ func (p *picker) render(width int, current string) string {
 			marker := "  "
 			if line == current {
 				marker = "• "
+			} else if p.cfg != nil && p.cfg.IsFavourite(line) {
+				marker = favMarker
 			}
 			// Flag a model whose provider has no key: its catalogue lists but
 			// its completions will not run.
