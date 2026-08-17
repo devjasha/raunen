@@ -173,6 +173,11 @@ type Model struct {
 	// ref is the active "provider/model" reference, kept so the context limit
 	// can be looked up again after /model.
 	ref string
+	// rejected records that the chosen model refused outright this turn, so a
+	// switch away from it can be made permanent rather than repeated tomorrow.
+	rejected bool
+	// adopt is a model to remember as the default, but only after it answers.
+	adopt string
 	// chosen is the model the user picked, which is not always the active one:
 	// escalation moves ref to a roomier model for a turn, and that is a
 	// temporary measure rather than a decision worth remembering.
@@ -931,6 +936,8 @@ func (m *Model) send(text string) (tea.Model, tea.Cmd) {
 	m.md = markdown{}
 	m.inText = false
 	m.warnedFull = false
+	m.rejected = false
+	m.adopt = ""
 	m.events = make(chan agent.Event, 64)
 	// Sending jumps back to the newest output: the reply is what you want to
 	// see, wherever you had scrolled to.
@@ -1074,6 +1081,14 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	case agent.Switched:
 		m.ref = e.To
 		m.warnedFull = false
+		// A model that refused outright will refuse again next session, so
+		// leaving it as the default means starting every session with the same
+		// failure. The replacement is adopted only once it has actually
+		// answered, though — adopting it here churned the default through a
+		// whole ladder of models that were failing too.
+		if m.rejected && e.From == m.chosen {
+			m.adopt = e.To
+		}
 		m.push(entry{
 			first: "  " + okStyle.Render("⇅ "),
 			cont:  "    ",
@@ -1083,6 +1098,9 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.Rejected:
+		if e.Ref == m.chosen {
+			m.rejected = true
+		}
 		m.push(entry{
 			first: "  " + errStyle.Render("✗ "),
 			cont:  "    ",
@@ -1091,12 +1109,22 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		})
 		return *m, next
 
+	case agent.Retrying:
+		m.push(entry{
+			first: "  " + dimStyle.Render("↻ "),
+			cont:  "    ",
+			text: dimStyle.Render(fmt.Sprintf("retrying in %s (attempt %d)",
+				e.After.Round(time.Millisecond*100), e.Attempt)) +
+				dimStyle.Render("  — "+ansi.Truncate(e.Reason, max(20, m.innerWidth()-40), "…")),
+		})
+		return *m, next
+
 	case agent.Tripped:
 		m.push(entry{
 			first: "  " + askStyle.Render("⚠ "),
 			cont:  "    ",
 			text: askStyle.Render(e.Provider+" taken out of rotation") +
-				dimStyle.Render(fmt.Sprintf("  — repeated failures, retrying in %s", e.For)),
+				dimStyle.Render(fmt.Sprintf("  — %s, retrying in %s", e.Reason, e.For)),
 		})
 		return *m, next
 
@@ -1109,6 +1137,20 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	case agent.TurnEnd:
 		m.think = ""
 		m.comp.Turns++
+		// The turn finished, so whatever produced it works. Now it is worth
+		// remembering in place of the model that refused.
+		if m.adopt != "" {
+			from, to := m.chosen, m.adopt
+			m.adopt, m.rejected, m.chosen = "", false, to
+			if m.cfg.Default != to {
+				m.cfg.Default = to
+				if err := m.cfg.Save(); err != nil {
+					m.add(errStyle.Render("✗ could not remember the model: " + err.Error()))
+				} else {
+					m.add(dimStyle.Render("remembering " + to + " — " + from + " refused"))
+				}
+			}
+		}
 		// Cheap, and catches a branch the agent itself switched.
 		m.branch = vcs.Branch(m.root)
 		m.flush()

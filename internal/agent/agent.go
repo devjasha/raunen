@@ -76,11 +76,22 @@ type Rejected struct {
 	Reason string
 }
 
+// Retrying reports that a request is being sent again after the endpoint failed
+// in a way that often clears by itself.
+type Retrying struct {
+	Attempt int
+	After   time.Duration
+	Reason  string
+}
+
 // Tripped reports that an endpoint has been taken out of rotation after
 // repeated failures.
 type Tripped struct {
 	Provider string
 	For      time.Duration
+	// Reason distinguishes an endpoint that keeps failing from one whose
+	// allowance has simply run out — the remedy is not the same.
+	Reason string
 }
 
 // Trimmed reports that old exchanges were dropped to keep the request inside
@@ -104,6 +115,7 @@ func (ModeChanged) event()    {}
 func (Trimmed) event()        {}
 func (Tripped) event()        {}
 func (Rejected) event()       {}
+func (Retrying) event()       {}
 func (TaskStart) event()      {}
 func (TaskEnd) event()        {}
 func (TurnEnd) event()        {}
@@ -113,6 +125,17 @@ const DefaultSystem = `You are a terminal coding assistant. You have tools to re
 files and to run shell commands. Work in small concrete steps: inspect before
 you change, and verify after. Prefer running a command to guessing at its
 output. Keep replies short — the user is reading them in a terminal.`
+
+// maxRetries is how many times a request is repeated after the endpoint fails
+// in a way that tends to clear. Two is enough for a hiccup and short enough that
+// a real outage is not waited out.
+const maxRetries = 2
+
+// retryDelay backs off a little between attempts, so a busy endpoint gets a
+// moment rather than the same burst again.
+func retryDelay(attempt int) time.Duration {
+	return time.Duration(attempt) * 1500 * time.Millisecond
+}
 
 // maxSteps bounds a single turn so a confused model cannot loop forever.
 const maxSteps = 40
@@ -135,6 +158,9 @@ type Agent struct {
 	// health remembers what has recently failed, so the same dead end is not
 	// walked into every turn. Shared with sub-agents by pointer.
 	health *health
+	// attempt counts consecutive retries of the same request after a transient
+	// failure. Reset by any success.
+	attempt int
 	// schemaTokens is what the tool definitions cost on every request. They are
 	// not part of the message list but they are very much part of the prompt:
 	// leaving them out understates a small model's usage by hundreds of tokens.
@@ -272,18 +298,40 @@ func (a *Agent) trim(out chan<- Event) {
 // are there, and the whole string is returned when they are not.
 func endpointMessage(err error) string {
 	msg := err.Error()
+	// The body is appended after the status, and it contains ": " itself — so it
+	// is found by locating where the JSON starts rather than by splitting on the
+	// last colon, which returned a fragment of the middle of it.
+	if i := strings.Index(msg, "{"); i >= 0 {
+		var body struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(msg[i:]), &body) == nil && body.Error.Message != "" {
+			return strings.TrimSpace(body.Error.Message)
+		}
+		// Unparseable JSON is worse than the wrapped text, so fall back to
+		// everything before it.
+		return strings.TrimSpace(strings.TrimSuffix(msg[:i], ": "))
+	}
 	if i := strings.LastIndex(msg, ": "); i >= 0 {
-		msg = msg[i+2:]
-	}
-	var body struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal([]byte(msg), &body) == nil && body.Error.Message != "" {
-		return body.Error.Message
+		return strings.TrimSpace(msg[i+2:])
 	}
 	return strings.TrimSpace(msg)
+}
+
+// sharedQuota reports whether a refusal is against an allowance the whole
+// provider draws on, rather than this model's own throughput.
+//
+// It matters because a per-day free-tier cap is shared: when it is gone, every
+// free model behind that provider will refuse too, and walking a ladder of them
+// spends eight requests discovering it.
+func sharedQuota(err error) bool {
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "daily") ||
+		strings.Contains(m, "per-day") ||
+		strings.Contains(m, "per day") ||
+		strings.Contains(m, "free_tier")
 }
 
 // lastUser is the index of the most recent user message, or zero if there is
@@ -395,10 +443,22 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			// next turn does not have to learn it again.
 			switch {
 			case errors.Is(err, provider.ErrRateLimited):
-				wait := a.hp().RateLimited(a.ref)
 				why := endpointMessage(err)
 				out <- Rejected{Ref: a.ref, Reason: why}
-				if a.escalate(forFailure, fmt.Sprintf("rate limited, resting %s", wait.Round(time.Second)), out) {
+				reason := "rate limited"
+				if sharedQuota(err) {
+					// The allowance belongs to the provider, so its other models
+					// are equally out. Rest the whole endpoint instead of
+					// learning that eight more times.
+					a.hp().Exhaust(providerOf(a.ref))
+					out <- Tripped{Provider: providerOf(a.ref), For: quotaCooldown,
+						Reason: "its allowance is used up"}
+					reason = "provider's allowance is used up"
+				} else {
+					wait := a.hp().RateLimited(a.ref)
+					reason = fmt.Sprintf("rate limited, resting %s", wait.Round(time.Second))
+				}
+				if a.escalate(forFailure, reason, out) {
 					continue
 				}
 
@@ -423,8 +483,26 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 					continue
 				}
 			case errors.Is(err, provider.ErrUnavailable):
+				// A 500 or a dropped connection is usually the endpoint having a
+				// moment rather than anything wrong with the request, and
+				// sending it again is far more likely to work than moving to a
+				// different model. Only after that does the ladder come into it.
+				if a.attempt < maxRetries {
+					a.attempt++
+					wait := retryDelay(a.attempt)
+					out <- Retrying{Attempt: a.attempt, After: wait, Reason: endpointMessage(err)}
+					select {
+					case <-time.After(wait):
+					case <-ctx.Done():
+						out <- Failed{Err: ctx.Err()}
+						return
+					}
+					continue
+				}
+				a.attempt = 0
 				if a.hp().Unavailable(a.ref) {
-					out <- Tripped{Provider: providerOf(a.ref), For: breakerCooldown}
+					out <- Tripped{Provider: providerOf(a.ref), For: breakerCooldown,
+						Reason: "repeated failures"}
 				}
 				if a.escalate(forFailure, "endpoint unavailable", out) {
 					continue
@@ -437,6 +515,7 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			out <- Failed{Err: fmt.Errorf("%s", endpointMessage(err))}
 			return
 		}
+		a.attempt = 0
 		a.hp().Succeeded(a.ref)
 		a.messages = append(a.messages, msg)
 

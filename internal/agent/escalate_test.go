@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -247,4 +248,64 @@ func TestEscalateIgnoresSizeWhenRefused(t *testing.T) {
 		t.Error("escalated to a smaller window when the problem was room")
 	}
 	drain(out2)
+}
+
+// The endpoint's message has to survive intact: it is the only actionable part,
+// and the body contains ": " itself, which a naive split mangled into a fragment
+// of the middle of the JSON.
+func TestEndpointMessageExtraction(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "json body with colons inside it",
+			err: errors.New(`rate limited: https://openrouter.ai/api/v1 returned 429 Too Many Requests: ` +
+				`{"error":{"message":"free-models-per-day. Add 10 credits to unlock 1000 free model requests per day","code":429,` +
+				`"metadata":{"headers":{"X-RateLimit-Limit":"50"}}}}`),
+			want: "free-models-per-day. Add 10 credits to unlock 1000 free model requests per day",
+		},
+		{
+			name: "plain text",
+			err:  errors.New("endpoint unavailable: http://localhost:11434/v1: connection refused"),
+			want: "connection refused",
+		},
+		{
+			name: "json that will not parse falls back rather than leaking a fragment",
+			err:  errors.New("model unusable: https://x/v1 returned 400 Bad Request: {truncated"),
+			want: "model unusable: https://x/v1 returned 400 Bad Request",
+		},
+	}
+	for _, c := range cases {
+		if got := endpointMessage(c.err); got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A shared allowance has to be recognised from the refusal, since that is what
+// decides whether the provider's other models are worth trying.
+func TestSharedQuotaDetection(t *testing.T) {
+	shared := []string{
+		`{"error":{"message":"free-models-per-day. Add 10 credits","metadata":{"limit_source":"openrouter_free_tier_daily"}}}`,
+		`rate limited: daily limit reached`,
+		`rate limited: 50 requests per day exceeded`,
+	}
+	for _, m := range shared {
+		if !sharedQuota(errors.New(m)) {
+			t.Errorf("not detected as a shared allowance: %s", m)
+		}
+	}
+	// A plain throughput limit is this model's own and must not rest the
+	// provider, which would take working models out with it.
+	perModel := []string{
+		"rate limited: too many requests, slow down",
+		"rate limited: 20 requests per minute",
+	}
+	for _, m := range perModel {
+		if sharedQuota(errors.New(m)) {
+			t.Errorf("wrongly treated as a shared allowance: %s", m)
+		}
+	}
 }

@@ -227,6 +227,7 @@ the same tax. Three layers, because failures differ in what they imply:
 |---|---|
 | `429` rate limit | cool that model down, 30s doubling to 15 minutes |
 | `402` needs credits | lock that model out for the session |
+| `429` on a shared allowance | rest the whole provider for 30 minutes |
 | connection refused, `5xx` | after 3 in a row, take the whole endpoint out for 2 minutes |
 | `400`/`404` model rejected | lock that model out for the session |
 
@@ -245,6 +246,22 @@ usually specific enough to act on:
   2666. To increase, visit https://openrouter.ai/settings/credits
 ⇅ switched to openrouter/nvidia/nemotron-3-ultra-550b-a55b:free — needs credits
 ```
+
+**A shared allowance takes the provider with it.** A free tier's per-day cap
+belongs to the account, not to one model, so when it runs out every free model
+behind that provider will refuse too. Recognising that from the refusal turns
+eight doomed requests into one:
+
+```
+✗ openrouter/nvidia/nemotron-3.5-lightning:free refused — Rate limit exceeded:
+  free-models-per-day. Add 10 credits to unlock 1000 free model requests per day
+⚠ openrouter taken out of rotation — its allowance is used up, retrying in 30m
+```
+
+**A model is only remembered once it answers.** Escalating away from a model
+that refused updates the saved default, but only after the replacement has
+actually completed a turn — adopting it at the moment of switching churned the
+default through a whole ladder of models that were failing too.
 
 **Size only matters when room is the problem.** After a refusal, a slightly
 smaller model that answers beats a larger one that will not — insisting on a

@@ -127,6 +127,20 @@ func (h *health) Unavailable(ref string) bool {
 	return true
 }
 
+// quotaCooldown is how long a provider rests once a shared allowance runs out.
+// Long, because a daily cap does not come back in minutes, but not permanent,
+// since the reset may well fall inside a long session.
+const quotaCooldown = 30 * time.Minute
+
+// Exhaust takes a whole provider out of rotation because an allowance they all
+// draw on has run out.
+func (h *health) Exhaust(name string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.breakerUntil[name] = time.Now().Add(quotaCooldown)
+	h.failures[name] = 0
+}
+
 // LockOut writes a model off for the rest of the session.
 func (h *health) LockOut(ref, why string) {
 	h.mu.Lock()

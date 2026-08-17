@@ -153,3 +153,24 @@ func TestHeldReportsReasons(t *testing.T) {
 		t.Errorf("nvidia/typo reason = %q", seen["nvidia/typo"])
 	}
 }
+
+// A per-day free-tier cap is shared by every model behind the provider, so
+// walking a ladder of them spends a request each to learn the same thing.
+func TestSharedQuotaRestsTheWholeProvider(t *testing.T) {
+	h := newHealth()
+	h.Exhaust("openrouter")
+
+	for _, ref := range []string{"openrouter/a:free", "openrouter/b:free"} {
+		ok, why := h.Available(ref)
+		if ok {
+			t.Errorf("%s still offered after the provider's allowance ran out", ref)
+		}
+		if !strings.Contains(why, "openrouter") {
+			t.Errorf("reason for %s = %q, want it to name the provider", ref, why)
+		}
+	}
+	// One provider running dry says nothing about another.
+	if ok, _ := h.Available("groq/llama"); !ok {
+		t.Error("an unrelated provider was rested too")
+	}
+}
