@@ -1,0 +1,648 @@
+/* raunen.dev — one stylesheet, no build step, no dependencies.
+   Monospace throughout: the product is a terminal, and a page about it that
+   looks like a SaaS landing page is describing something else. */
+
+:root {
+  --font-mono: "Berkeley Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular,
+    Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  --fg: hsl(0, 1%, 39%);
+  --fg-weak: hsl(0, 1%, 60%);
+  --fg-strong: hsl(0, 5%, 12%);
+  --bg: hsl(0, 20%, 99%);
+  --bg-weak: hsl(0, 8%, 97%);
+  --bg-strong: hsl(0, 5%, 12%);
+  --border: hsl(30, 2%, 81%);
+  --border-weak: hsla(0, 100%, 3%, 0.12);
+
+  /* The one colour on the page. It is the dragon, and the accent everywhere
+     else, so the amber context bar in the screenshots has a counterpart. */
+  --accent: hsl(28, 82%, 46%);
+  --accent-weak: hsl(38, 90%, 95%);
+  --ok: hsl(142, 60%, 33%);
+
+  --measure: 68rem;
+  --pad: 2rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: hsl(0, 4%, 71%);
+    --fg-weak: hsl(0, 2%, 49%);
+    --fg-strong: hsl(0, 15%, 94%);
+    --bg: hsl(0, 9%, 7%);
+    --bg-weak: hsl(0, 6%, 10%);
+    --bg-strong: hsl(0, 15%, 94%);
+    --border: hsl(0, 3%, 28%);
+    --border-weak: hsl(0, 4%, 23%);
+    --accent: hsl(33, 90%, 60%);
+    --accent-weak: hsl(30, 25%, 12%);
+    --ok: hsl(142, 45%, 55%);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: var(--fg);
+  background: var(--bg);
+  /* The terminal look survives on a phone only if nothing overflows. */
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--fg-strong);
+  text-decoration-color: var(--border);
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+h1,
+h2,
+h3 {
+  color: var(--fg-strong);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+.wrap {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 0 var(--pad);
+}
+
+.rule {
+  border: 0;
+  border-top: 1px solid var(--border-weak);
+  margin: 0;
+}
+
+/* ── header ─────────────────────────────────────────────────────────── */
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  /* Solid first: relative-colour syntax is recent, and where it is not
+     understood the whole declaration is dropped — leaving a transparent
+     header with the transcript scrolling through it. */
+  background: var(--bg);
+  background: hsl(from var(--bg) h s l / 0.85);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-weak);
+}
+
+header .wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 3.25rem;
+}
+
+.brand {
+  color: var(--fg-strong);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.brand::before {
+  content: "▌";
+  color: var(--accent);
+  margin-right: 0.4em;
+}
+
+nav {
+  display: flex;
+  gap: 1.25rem;
+  font-size: 0.8125rem;
+}
+
+nav a {
+  color: var(--fg-weak);
+  text-decoration: none;
+}
+
+nav a:hover {
+  color: var(--accent);
+}
+
+@media (max-width: 34rem) {
+  nav .opt {
+    display: none;
+  }
+}
+
+/* ── hero ───────────────────────────────────────────────────────────── */
+
+.hero {
+  padding: 4.5rem 0 3.5rem;
+}
+
+.dragon {
+  color: var(--accent);
+  font-size: 0.6875rem;
+  line-height: 1.15;
+  margin: 0 0 2rem;
+  /* ASCII art is a fixed grid: it may shrink on a narrow screen but it must
+     never wrap, or the dragon comes apart. */
+  overflow-x: auto;
+  white-space: pre;
+}
+
+h1 {
+  font-size: 1.875rem;
+  margin: 0 0 0.75rem;
+}
+
+.tagline {
+  font-size: 1.0625rem;
+  max-width: 46rem;
+  margin: 0 0 2rem;
+}
+
+.tagline strong {
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+
+/* The install line is the call to action: it is the whole install. */
+.install {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.875rem 1rem;
+  background: var(--bg-weak);
+  border: 1px solid var(--border-weak);
+  border-radius: 6px;
+  max-width: 46rem;
+}
+
+.install code {
+  flex: 1 1 20rem;
+  font-size: 0.8125rem;
+  color: var(--fg-strong);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.install code::before {
+  content: "$ ";
+  color: var(--accent);
+}
+
+button.copy {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+
+button.copy:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.beneath {
+  font-size: 0.8125rem;
+  color: var(--fg-weak);
+  margin: 0.875rem 0 0;
+}
+
+/* ── terminal frame ─────────────────────────────────────────────────── */
+
+.term {
+  background: var(--bg-weak);
+  border: 1px solid var(--border-weak);
+  border-radius: 6px;
+  margin: 0;
+  overflow: hidden;
+}
+
+.term-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-weak);
+  font-size: 0.6875rem;
+  color: var(--fg-weak);
+}
+
+.dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.term-bar .title {
+  margin-left: 0.5rem;
+}
+
+.term pre {
+  margin: 0;
+  padding: 1rem;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+
+/* Colours inside the transcripts, matching what the TUI actually prints. */
+.term .u {
+  color: var(--fg-strong);
+}
+.term .t {
+  color: var(--accent);
+}
+.term .d {
+  color: var(--fg-weak);
+}
+.term .g {
+  color: var(--ok);
+}
+
+/* ── sections ───────────────────────────────────────────────────────── */
+
+section {
+  padding: 3.5rem 0;
+}
+
+section > .wrap > h2 {
+  font-size: 1.375rem;
+  margin: 0 0 0.5rem;
+}
+
+.lede {
+  max-width: 46rem;
+  margin: 0 0 2rem;
+  color: var(--fg);
+}
+
+/* ── feature grid ───────────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1px;
+  background: var(--border-weak);
+  border: 1px solid var(--border-weak);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.cell {
+  background: var(--bg);
+  padding: 1.5rem;
+}
+
+.cell h3 {
+  font-size: 0.9375rem;
+  margin: 0 0 0.4rem;
+}
+
+.cell h3::before {
+  content: "▪";
+  color: var(--accent);
+  margin-right: 0.5em;
+}
+
+.cell p {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--fg-weak);
+}
+
+/* ── split rows ─────────────────────────────────────────────────────── */
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 2.5rem;
+  align-items: start;
+}
+
+@media (max-width: 52rem) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+}
+
+.split h2 {
+  font-size: 1.25rem;
+  margin: 0 0 0.5rem;
+}
+
+.split p {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+}
+
+.split p:last-child {
+  margin-bottom: 0;
+}
+
+.split strong {
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+
+/* ── table ──────────────────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  margin: 0;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border-weak);
+  vertical-align: top;
+}
+
+th {
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+
+td:first-child {
+  color: var(--fg-strong);
+  white-space: nowrap;
+}
+
+/* ── footer ─────────────────────────────────────────────────────────── */
+
+footer {
+  padding: 2.5rem 0 3.5rem;
+  font-size: 0.8125rem;
+  color: var(--fg-weak);
+  border-top: 1px solid var(--border-weak);
+}
+
+footer .wrap {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+footer a {
+  color: var(--fg-weak);
+}
+
+/* Motion is decoration here; anyone who has asked for less should get none. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ── docs layout ────────────────────────────────────────────────────── */
+
+.docs {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  gap: 3rem;
+  align-items: start;
+  padding: 2.5rem 0 4rem;
+}
+
+@media (max-width: 52rem) {
+  .docs {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+}
+
+.sidebar {
+  position: sticky;
+  top: 4.25rem;
+  font-size: 0.8125rem;
+}
+
+@media (max-width: 52rem) {
+  .sidebar {
+    position: static;
+    border-bottom: 1px solid var(--border-weak);
+    padding-bottom: 1rem;
+  }
+}
+
+.sidebar h4 {
+  margin: 0 0 0.5rem;
+  color: var(--fg-weak);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidebar ul {
+  list-style: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+}
+
+.sidebar li {
+  margin: 0 0 0.15rem;
+}
+
+.sidebar a {
+  color: var(--fg-weak);
+  text-decoration: none;
+  display: block;
+  padding: 0.15rem 0;
+}
+
+.sidebar a:hover {
+  color: var(--accent);
+}
+
+/* Set by TanStack Router on the link matching the current route, so the
+   sidebar says where you are without any state of its own. */
+.sidebar a.active {
+  color: var(--fg-strong);
+}
+
+.sidebar a.active::before {
+  content: "▌";
+  color: var(--accent);
+  margin-left: -0.75em;
+}
+
+/* ── prose ──────────────────────────────────────────────────────────── */
+
+.prose {
+  max-width: 46rem;
+}
+
+.prose h1 {
+  font-size: 1.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.prose h2 {
+  font-size: 1.125rem;
+  margin: 2.5rem 0 0.75rem;
+}
+
+.prose h3 {
+  font-size: 0.9375rem;
+  margin: 1.75rem 0 0.5rem;
+}
+
+.prose p {
+  margin: 0 0 1rem;
+}
+
+.prose strong {
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+
+.prose ul {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+
+.prose li {
+  margin: 0 0 0.35rem;
+}
+
+.prose .term,
+.prose table {
+  margin: 0 0 1.25rem;
+}
+
+.prose code {
+  font-size: 0.875em;
+}
+
+.lead {
+  font-size: 1.0625rem;
+  color: var(--fg);
+  margin: 0 0 2rem;
+}
+
+/* A callout for the thing on a page most likely to be got wrong. */
+.note {
+  border-left: 2px solid var(--accent);
+  background: var(--accent-weak);
+  padding: 0.875rem 1rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.875rem;
+}
+
+.note p:last-child {
+  margin-bottom: 0;
+}
+
+/* ── cost table ─────────────────────────────────────────────────────── */
+
+.price-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1px;
+  background: var(--border-weak);
+  border: 1px solid var(--border-weak);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 0 0 1.5rem;
+}
+
+.price {
+  background: var(--bg);
+  padding: 1.5rem;
+}
+
+.price h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.9375rem;
+}
+
+.price .amount {
+  color: var(--accent);
+  font-size: 1.5rem;
+  display: block;
+  margin: 0 0 0.75rem;
+}
+
+.price p {
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--fg-weak);
+}
+
+.price ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  color: var(--fg-weak);
+}
+
+.price li {
+  padding: 0.2rem 0 0.2rem 1.1rem;
+  position: relative;
+}
+
+.price li::before {
+  content: "·";
+  color: var(--accent);
+  position: absolute;
+  left: 0.25rem;
+}
+
+/* ── page footer nav ────────────────────────────────────────────────── */
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-weak);
+  font-size: 0.8125rem;
+}
+
+.pager a {
+  color: var(--fg-weak);
+  text-decoration: none;
+}
+
+.pager a:hover {
+  color: var(--accent);
+}
