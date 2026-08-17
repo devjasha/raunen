@@ -32,7 +32,6 @@ import (
 	"os"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -115,10 +114,6 @@ const boxPadX = 1
 // padX is the gutter kept on both sides of the screen, so nothing sits flush
 // against the terminal edge.
 const padX = 2
-
-// maxThinkBytes caps how much of a reasoning model's thinking is kept for
-// display. Only the tail matters; it is shown live and never stored.
-const maxThinkBytes = 8000
 
 // maxLines caps the retained transcript. Old lines are dropped rather than
 // growing the model without bound over a long session.
@@ -455,31 +450,17 @@ func (m *Model) rewrap() {
 	}
 }
 
-// content is what the transcript area shows: the conversation, followed by the
-// live thinking block if a reasoning model is mid-thought. Thinking is rendered
-// here rather than on the status row so it can run to several lines.
+// content is what the transcript area shows: the conversation, followed by a
+// single spinner line while a reasoning model is mid-thought. The thinking
+// itself is never shown — only the tools it uses and the answer it reaches are
+// worth the room — so this line is just a sign the model is still working.
 func (m Model) content() []string {
 	if m.think == "" {
 		return m.display
 	}
-	rows := make([]string, 0, len(m.display)+8)
+	rows := make([]string, 0, len(m.display)+1)
 	rows = append(rows, m.display...)
-	rows = append(rows, m.thinkRows()...)
-	return rows
-}
-
-// thinkRows renders the thinking as dim wrapped rows under a quiet label.
-func (m Model) thinkRows() []string {
-	text := strings.TrimSpace(m.think)
-	if text == "" {
-		return nil
-	}
-	rows := []string{"", dimStyle.Render("thinking")}
-	for _, para := range strings.Split(text, "\n") {
-		for _, row := range strings.Split(m.wrap(para), "\n") {
-			rows = append(rows, thinkStyle.Render(row))
-		}
-	}
+	rows = append(rows, thinkStyle.Render("thinking…"))
 	return rows
 }
 
@@ -1099,7 +1080,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.ReasoningDelta:
-		m.think = tailOf(m.think+e.Text, maxThinkBytes)
+		m.think = m.think + e.Text
 		return *m, next
 
 	case agent.ToolStart:
@@ -1514,18 +1495,14 @@ func (m Model) View() tea.View {
 			askStyle.Render("n") + dimStyle.Render(" decline")
 	} else if m.busy {
 		f := spinnerFrames[m.frame%len(spinnerFrames)]
-		// The thinking itself is shown in the transcript area, so the status
-		// row only reports state.
-		s := "working"
-		if m.think != "" {
-			s = "thinking"
-		}
+		// The model is mid-turn. Its thinking is not shown, so this only
+		// reports that it is working and what to press to stop.
 		tail := "  esc to cancel"
 		if m.queued != "" {
 			tail = "  ⏎ 1 queued  ·  esc to cancel"
 		}
 		status = spinStyle.Render(f) + " " +
-			dimStyle.Render(ansi.Truncate(s, max(10, m.innerWidth()-len(tail)-6), "…")) +
+			dimStyle.Render(ansi.Truncate("working", max(10, m.innerWidth()-len(tail)-6), "…")) +
 			dimStyle.Render(tail)
 	} else if m.queued != "" {
 		status = dimStyle.Render("⏎ queued: " + ansi.Truncate(m.queued, max(10, m.innerWidth()-24), "…"))
@@ -1801,18 +1778,6 @@ func splitLines(s string) (lines []string, rest string) {
 		return nil, s
 	}
 	return strings.Split(s[:i], "\n"), s[i+1:]
-}
-
-// tailOf keeps the last n bytes, on a rune boundary.
-func tailOf(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	s = s[len(s)-n:]
-	for len(s) > 0 && !utf8.RuneStart(s[0]) {
-		s = s[1:]
-	}
-	return s
 }
 
 func waitFor(ch chan agent.Event) tea.Cmd {
