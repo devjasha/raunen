@@ -76,8 +76,40 @@ type Config struct {
 	// System overrides the built-in system prompt when non-empty.
 	System string `json:"system,omitempty"`
 
+	// MCP holds Model Context Protocol servers, keyed by a name of the user's
+	// choosing. Each one is started on launch and its tools added to the agent.
+	// They live in their own file (mcp.json) rather than the main config so a
+	// server that needs a secret — an API key in its env — is not shoulder-to-
+	// shoulder with the model defaults, and can be shared without dragging the
+	// rest of the config along.
+	MCP map[string]MCP `json:"mcp,omitempty"`
+	// EnabledMCP names the MCP servers to actually start, out of those defined.
+	// A server can be defined but left out of this list so it stays configured
+	// but idle; the empty list means "start every defined server".
+	EnabledMCP []string `json:"mcp_enabled,omitempty"`
+
 	// file is where this config was read from, so it can be written back.
 	file string `json:"-"`
+}
+
+// MCP is one Model Context Protocol server definition.
+type MCP struct {
+	// Command is the program to run for a stdio server, resolved on PATH like
+	// any other command.
+	Command string `json:"command"`
+	// Args are passed to Command after its name.
+	Args []string `json:"args,omitempty"`
+	// Env is extra environment for the server process — typically a token it
+	// needs. Inherited from the parent, so PATH carries over. Ignored for http.
+	Env map[string]string `json:"env,omitempty"`
+	// Type selects the transport: "" or "stdio" for a local subprocess, "http"
+	// for a remote Streamable-HTTP server. Empty means stdio.
+	Type string `json:"type,omitempty"`
+	// URL is the Streamable-HTTP endpoint, used when Type is "http".
+	URL string `json:"url,omitempty"`
+	// Headers are extra HTTP headers for an http server, e.g. an Authorization
+	// bearer token. Forwarded verbatim on every request.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // SetKey stores an API key for a provider and writes the config out. The key
@@ -185,6 +217,81 @@ func (c *Config) names() []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// MCPPath is where MCP server definitions are stored. Kept apart from the main
+// config: a server definition can carry secrets in its env, and the set of
+// servers is a different thing to manage from the model defaults.
+func MCPPath() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "raunen", "mcp.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "raunen-mcp.json"
+	}
+	return filepath.Join(home, ".config", "raunen", "mcp.json")
+}
+
+// LoadMCP reads the MCP server definitions, writing a starter file if none
+// exists. It is deliberately independent of Load: the two files have different
+// contents and different reasons to be shared or edited.
+func LoadMCP() (map[string]MCP, error) {
+	path := MCPPath()
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		starter := map[string]MCP{}
+		if err := writeMCP(path, starter); err != nil {
+			return nil, err
+		}
+		return starter, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]MCP
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if m == nil {
+		m = map[string]MCP{}
+	}
+	return m, nil
+}
+
+// ActiveMCP returns the subset of defined servers that should be started: if
+// EnabledMCP names any, those (that are defined) are used; otherwise every
+// defined server is active. A name in EnabledMCP with no matching definition is
+// skipped.
+func (c *Config) ActiveMCP() map[string]MCP {
+	if len(c.EnabledMCP) == 0 {
+		return c.MCP
+	}
+	out := map[string]MCP{}
+	for _, name := range c.EnabledMCP {
+		if s, ok := c.MCP[name]; ok {
+			out[name] = s
+		}
+	}
+	return out
+}
+
+func writeMCP(path string, m map[string]MCP) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Path is the default config location. It follows XDG rather than

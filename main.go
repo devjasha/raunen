@@ -16,6 +16,7 @@ import (
 	"raunen/internal/agent"
 	"raunen/internal/companion"
 	"raunen/internal/config"
+	"raunen/internal/mcp"
 	"raunen/internal/provider"
 	"raunen/internal/session"
 	"raunen/internal/tools"
@@ -110,6 +111,12 @@ func run() error {
 	window := windowFor(cfg, p, ref, model)
 
 	reg := tools.Default(root, tools.OutputBudget(window))
+	// MCP servers add tools alongside the built-ins; failures are reported but do
+	// not stop startup, so one broken server is not the whole session.
+	mcpServers := startMCP(cfg)
+	defer mcpServers.Close()
+	reg = mcpServers.AddTo(reg)
+
 	ag := agent.New(provider.New(p.BaseURL, p.Key(), model), reg, cfg.System)
 	ag.SetContext(window)
 	ag.SetRef(ref)
@@ -144,8 +151,79 @@ func run() error {
 	// saved to disk instead, and resumed with --continue or /resume.
 	comp := companion.Load()
 	ui.Version = version
-	_, err = tea.NewProgram(ui.New(cfg, ag, root, ref, sess, comp)).Run()
+	m := ui.New(cfg, ag, root, ref, sess, comp)
+	m.SetMCPSummary(mcpServers.counts)
+	_, err = tea.NewProgram(m).Run()
 	return err
+}
+
+// mcpServers is the set of MCP connections opened for this run. It exists so
+// the subprocesses can be stopped together on exit, and so the tools they
+// contributed can be folded into the registry deterministically.
+type mcpServers struct {
+	clients []*mcp.Client
+	// byName maps a server name to how many tools it contributed, for /status.
+	counts map[string]int
+}
+
+// Close stops every MCP server, freeing its process. The agent keeps running;
+// any tool that pointed at a stopped server simply starts failing.
+func (s *mcpServers) Close() {
+	for _, c := range s.clients {
+		c.Close()
+	}
+}
+
+// AddTo copies the registry and registers every tool the servers advertised,
+// renaming on collision so two servers that both expose "search" do not
+// overwrite one another. The model sees each tool prefixed with its server.
+func (s *mcpServers) AddTo(reg *tools.Registry) *tools.Registry {
+	out := reg.Clone()
+	for _, c := range s.clients {
+		cnt := 0
+		for _, t := range c.Tools() {
+			name := t.Name
+			// Two servers may both expose "search"; disambiguate rather than let
+			// the second overwrite the first, which would silently reroute calls.
+			for out.Has(name) {
+				name = c.Name() + "_" + t.Name
+			}
+			t.Name = name
+			out.Add(t)
+			cnt++
+		}
+		s.counts[c.Name()] = cnt
+	}
+	return out
+}
+
+// startMCP launches every enabled MCP server and collects those that came up.
+// A server that fails to start is reported and skipped, because a missing tool
+// is survivable while a missing model is not.
+func startMCP(cfg *config.Config) *mcpServers {
+	ss := &mcpServers{counts: map[string]int{}}
+	defs := cfg.ActiveMCP()
+	if len(defs) == 0 {
+		return ss
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for name, def := range defs {
+		c, err := mcp.Start(ctx, name, mcp.Server{
+			Command: def.Command,
+			Args:    def.Args,
+			Env:     def.Env,
+			Type:    def.Type,
+			URL:     def.URL,
+			Headers: def.Headers,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "raunen: mcp %q not started — %s\n", name, err)
+			continue
+		}
+		ss.clients = append(ss.clients, c)
+	}
+	return ss
 }
 
 // discoverModel asks the configured endpoints what they serve and picks one,

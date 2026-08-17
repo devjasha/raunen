@@ -219,3 +219,44 @@ func ansiPad(s string, w int) string {
 	}
 	return s
 }
+
+// showMCP lists the configured MCP servers and how many tools each brought
+// into the session. A server that is defined but not started shows its tools as
+// zero, which is the clue that its command failed to launch.
+func (m *Model) showMCP() tea.Cmd {
+	m.blank()
+	m.push(entry{rule: true, stamp: "mcp"})
+
+	defs := m.cfg.MCP
+	if len(defs) == 0 {
+		m.add(dimStyle.Render("no MCP servers configured — see mcp.json"))
+		m.add(dimStyle.Render("  add one with a text editor, or /status to see what loaded"))
+		return nil
+	}
+
+	active := m.cfg.ActiveMCP()
+	// Stable order for a list whose contents are meaningful.
+	names := make([]string, 0, len(defs))
+	for n := range defs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	total := 0
+	for _, n := range names {
+		_, on := active[n]
+		count := m.mcp[n]
+		total += count
+		state := dimStyle.Render("off")
+		if on {
+			if count > 0 {
+				state = okStyle.Render(fmt.Sprintf("%d tools", count))
+			} else {
+				state = errStyle.Render("not started")
+			}
+		}
+		m.add(dimStyle.Render(fmt.Sprintf("  %-16s %s", n, state)))
+	}
+	m.add(dimStyle.Render(fmt.Sprintf("  %d servers · %d tools", len(active), total)))
+	return nil
+}

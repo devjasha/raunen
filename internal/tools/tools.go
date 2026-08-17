@@ -54,6 +54,31 @@ func (r *Registry) Add(t Tool) {
 	r.order = append(r.order, t.Name)
 }
 
+// Names returns the tools in the order they were added. Callers that only read
+// the registry should use this rather than reaching for the unexported fields.
+func (r *Registry) Names() []string {
+	out := make([]string, len(r.order))
+	copy(out, r.order)
+	return out
+}
+
+// Clone returns an independent copy with the same tools, in the same order.
+// Used to fold in a second source of tools without disturbing the original —
+// MCP servers register into a copy so the built-in set stays intact.
+func (r *Registry) Clone() *Registry {
+	out := &Registry{}
+	for _, n := range r.order {
+		out.Add(r.tools[n])
+	}
+	return out
+}
+
+// Has reports whether a tool by this name already exists.
+func (r *Registry) Has(name string) bool {
+	_, ok := r.tools[name]
+	return ok
+}
+
 // Without returns a copy of the registry with a tool removed. It is what stops
 // a sub-agent from delegating further: the child simply does not have the tool.
 func (r *Registry) Without(name string) *Registry {

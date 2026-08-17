@@ -207,6 +207,10 @@ type Model struct {
 	// sugOff dismisses the list until the input changes again, so esc and an
 	// accepted completion both close it without it springing straight back.
 	sugOff bool
+	// mcp is the number of tools each MCP server contributed this run, keyed by
+	// server name. Empty when none were configured; absent keys mean the server
+	// was defined but never started.
+	mcp map[string]int
 	// lastInput is what the input held when the list was last rebuilt, which is
 	// how a dismissal can tell "still the same word" from "typing again".
 	lastInput string
@@ -221,6 +225,11 @@ type Model struct {
 	height int
 	quit   bool
 }
+
+// SetMCPSummary records how many tools each MCP server contributed this run, so
+// /mcp and /status can list them. It is set once at startup, before the program
+// starts, and never changed — the agent keeps its tools for the whole session.
+func (m *Model) SetMCPSummary(s map[string]int) { m.mcp = s }
 
 func New(cfg *config.Config, ag *agent.Agent, root, ref string, sess *session.Session, comp *companion.Companion) Model {
 	ti := textarea.New()
@@ -1472,6 +1481,9 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 			m.add(dimStyle.Render(fmt.Sprintf("  %-12s %s", name, p.BaseURL)))
 		}
 		return *m, nil
+
+	case "/mcp":
+		return *m, m.showMCP()
 
 	case "/help":
 		// Printed from the same table the completion list offers, so what is

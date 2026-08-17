@@ -36,6 +36,7 @@ var commands = []command{
 	{name: "/clear", help: "start a new session", aliases: []string{"/new"}},
 	{name: "/sessions", help: "list saved sessions"},
 	{name: "/resume", args: "<id>", help: "pick up a saved session"},
+	{name: "/mcp", help: "list connected MCP servers and their tools"},
 	{name: "/help", help: "list the commands"},
 	{name: "/quit", help: "exit", aliases: []string{"/exit", "/q"}},
 }
