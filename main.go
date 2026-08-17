@@ -205,6 +205,15 @@ func fallbacks(cfg *config.Config) []agent.Candidate {
 	return out
 }
 
+// maxFreeRungs caps how many free models are added to the ladder.
+//
+// A catalogue can be enormous — NVIDIA lists over a hundred, including vision
+// and audio models that cannot answer a chat turn at all. Walking dozens of
+// them on a rate limit would take longer than failing, so the ladder keeps the
+// most promising few. Anything specific belongs in "fallback", which is not
+// capped, and /model can still reach every model by hand.
+const maxFreeRungs = 8
+
 // freeModels asks the providers which of their models cost nothing and turns
 // them into ladder rungs, roomiest first.
 //
@@ -228,11 +237,13 @@ func freeModels(cfg *config.Config) []agent.Candidate {
 		if err != nil {
 			continue
 		}
-		// A model served from your own machine costs nothing, whatever its
-		// pricing field says — which for a local runtime is nothing at all.
+		// Three ways a model counts as free: the catalogue prices it at zero,
+		// it is served from this machine, or the endpoint was declared free
+		// because it does not publish prices at all.
 		local := isLocal(p.BaseURL)
+		declared := p.Free || local
 		for _, m := range infos {
-			if !m.Free && !local {
+			if !m.Free && !declared {
 				continue
 			}
 			ref := name + "/" + m.ID
@@ -247,9 +258,12 @@ func freeModels(cfg *config.Config) []agent.Candidate {
 			// model, and applying it to every model would make them all look
 			// identical and the ladder pointless.
 			window = firstNonZero(window, cfg.ProviderContext(ref))
-			// A rung with no known window cannot be judged an upgrade, and
-			// switching to something smaller is worse than not switching.
-			if window == 0 {
+			// A rung with no known window cannot be judged an upgrade. For a
+			// discovered free model that is reason enough to leave it out; for
+			// an endpoint the user declared free it is not, since they asked
+			// for it — those are kept and sorted last, and declaring a context
+			// under "models" is what makes them useful.
+			if window == 0 && !p.Free {
 				continue
 			}
 			out = append(out, agent.Candidate{
@@ -259,7 +273,17 @@ func freeModels(cfg *config.Config) []agent.Candidate {
 			})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Context > out[j].Context })
+	// Roomiest first, with unknown windows last: they cannot be shown to be an
+	// upgrade, so they are a last resort rather than a first choice.
+	sort.Slice(out, func(i, j int) bool {
+		if (out[i].Context == 0) != (out[j].Context == 0) {
+			return out[j].Context == 0
+		}
+		return out[i].Context > out[j].Context
+	})
+	if len(out) > maxFreeRungs {
+		out = out[:maxFreeRungs]
+	}
 	return out
 }
 

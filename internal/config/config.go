@@ -17,6 +17,11 @@ type Provider struct {
 	APIKey  string `json:"api_key,omitempty"`
 	// APIKeyEnv reads the key from the environment instead of storing it here.
 	APIKeyEnv string `json:"api_key_env,omitempty"`
+	// Free marks an endpoint whose models cost nothing to call — a free tier, or
+	// anything self-hosted. It has to be declared because most endpoints do not
+	// say: OpenRouter publishes per-model pricing, but Groq, Cerebras and NVIDIA
+	// simply do not, and an unstated price cannot be assumed to be zero.
+	Free bool `json:"free,omitempty"`
 	// Context is a default context window in tokens for this provider's models.
 	// Most endpoints serve several models with different windows, so this is
 	// only a fallback — declare per-model windows under Config.Models.
@@ -169,6 +174,24 @@ func defaults() *Config {
 			"ollama-cloud": {
 				BaseURL:   "https://ollama.com/v1",
 				APIKeyEnv: "OLLAMA_API_KEY",
+			},
+			// Free tiers, all OpenAI-compatible, all needing a key of their own.
+			// Marked free because none of them publish pricing, so it cannot be
+			// worked out from the catalogue.
+			"groq": {
+				BaseURL:   "https://api.groq.com/openai/v1",
+				APIKeyEnv: "GROQ_API_KEY",
+				Free:      true,
+			},
+			"cerebras": {
+				BaseURL:   "https://api.cerebras.ai/v1",
+				APIKeyEnv: "CEREBRAS_API_KEY",
+				Free:      true,
+			},
+			"nvidia": {
+				BaseURL:   "https://integrate.api.nvidia.com/v1",
+				APIKeyEnv: "NVIDIA_API_KEY",
+				Free:      true,
 			},
 			"openrouter": {
 				BaseURL:   "https://openrouter.ai/api/v1",

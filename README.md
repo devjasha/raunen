@@ -406,6 +406,49 @@ escalation skips the rest:
 ladder    3 models, none roomier than 8192
 ```
 
+**Endpoints that do not publish prices have to be told.** OpenRouter prices
+every model, so its free ones are found automatically. Groq, Cerebras and NVIDIA
+publish nothing, and an unstated price cannot be assumed to be zero — so their
+provider entries carry `"free": true`, which is what makes them eligible:
+
+```json
+"groq":     { "base_url": "https://api.groq.com/openai/v1",      "api_key_env": "GROQ_API_KEY",     "free": true },
+"cerebras": { "base_url": "https://api.cerebras.ai/v1",          "api_key_env": "CEREBRAS_API_KEY", "free": true },
+"nvidia":   { "base_url": "https://integrate.api.nvidia.com/v1", "api_key_env": "NVIDIA_API_KEY",   "free": true }
+```
+
+All three ship in the default config, so getting on the ladder is a key away:
+
+```sh
+export GROQ_API_KEY=...      # console.groq.com
+export CEREBRAS_API_KEY=...  # cloud.cerebras.ai
+export NVIDIA_API_KEY=...    # build.nvidia.com
+```
+
+**Name the models you actually want.** An auto-discovered ladder is capped at
+eight rungs, because these catalogues are large and undiscriminating — NVIDIA
+lists over a hundred models including vision and embedding models that cannot
+answer a chat turn at all, and rotating through those on a rate limit takes
+longer than failing. Rungs with a known window sort first, so the cap trims the
+guesswork rather than the good options.
+
+For a ladder you can rely on, list them explicitly. `fallback` is not capped,
+and declaring windows makes escalation able to tell an upgrade from a sideways
+move:
+
+```json
+{
+  "auto_switch": true,
+  "fallback": ["groq/llama-3.3-70b-versatile", "nvidia/meta/llama-3.1-405b-instruct"],
+  "models": {
+    "groq/llama-3.3-70b-versatile":        { "context": 131072 },
+    "nvidia/meta/llama-3.1-405b-instruct": { "context": 131072 }
+  }
+}
+```
+
+`/model` reaches every model these endpoints serve regardless of the ladder.
+
 **"Free" means no per-token cost, not no account.** OpenRouter's free models
 still need `OPENROUTER_API_KEY`; without it they return `401`. Rungs whose key
 is missing are dropped from the ladder rather than kept to fail one by one, so
