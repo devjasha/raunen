@@ -74,6 +74,62 @@ func TestStreamCapturesFinishReason(t *testing.T) {
 	}
 }
 
+// A tool that takes no arguments is often called with none at all. The call
+// goes back with every later request, and a gateway translating to Anthropic's
+// schema rejects an empty string where a tool_use input should be — poisoning
+// the conversation, since the message it objects to is replayed on every retry.
+func TestStreamGivesEmptyToolArgsAnObject(t *testing.T) {
+	c := serve(t, frame(`{"tool_calls":[{"index":0,"id":"call_1","type":"function",`+
+		`"function":{"name":"list"}}]}`)+"data: [DONE]\n\n")
+
+	msg, _, err := c.Stream(context.Background(), nil, nil, Handler{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(msg.ToolCalls))
+	}
+	if got := msg.ToolCalls[0].Function.Arguments; got != "{}" {
+		t.Errorf("arguments = %q, want %q", got, "{}")
+	}
+}
+
+// Arguments the model did write are its own: dispatch hands malformed JSON back
+// as a tool result so it can correct itself, and rewriting them here would run
+// the tool with no arguments instead of reporting that anything went wrong.
+func TestStreamKeepsToolArgsAsWritten(t *testing.T) {
+	c := serve(t, frame(`{"tool_calls":[{"index":0,"id":"call_1","type":"function",`+
+		`"function":{"name":"read","arguments":"{\"path\":"}}]}`)+"data: [DONE]\n\n")
+
+	msg, _, err := c.Stream(context.Background(), nil, nil, Handler{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := msg.ToolCalls[0].Function.Arguments; got != `{"path":` {
+		t.Errorf("arguments = %q, want the malformed JSON left intact", got)
+	}
+}
+
+// A session saved before the above was fixed still holds the empty field, and
+// would fail on every turn after being resumed rather than only once.
+func TestNormalizeToolArgsRepairsSavedSessions(t *testing.T) {
+	msgs := []Message{
+		{Role: User, Content: "give me an overview"},
+		{Role: Assistant, ToolCalls: []ToolCall{
+			{ID: "call_1", Type: "function", Function: Function{Name: "list"}},
+			{ID: "call_2", Type: "function", Function: Function{Name: "read", Arguments: `{"path":"main.go"}`}},
+		}},
+	}
+	NormalizeToolArgs(msgs)
+
+	if got := msgs[1].ToolCalls[0].Function.Arguments; got != "{}" {
+		t.Errorf("empty arguments = %q, want %q", got, "{}")
+	}
+	if got := msgs[1].ToolCalls[1].Function.Arguments; got != `{"path":"main.go"}` {
+		t.Errorf("arguments = %q, want them untouched", got)
+	}
+}
+
 // Reasoning must reach the handler but never the message: it is shown live and
 // never sent back to the model.
 func TestStreamSeparatesReasoningFromContent(t *testing.T) {

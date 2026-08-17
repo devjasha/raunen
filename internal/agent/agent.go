@@ -385,6 +385,11 @@ func (a *Agent) Messages() []provider.Message { return a.messages }
 // prompt rather than the one the session was recorded with — the mode and
 // prompt may have changed since.
 func (a *Agent) Restore(msgs []provider.Message) {
+	// A session saved with an empty tool-call argument list would be rejected
+	// by any endpoint that speaks Anthropic's schema, on this turn and every
+	// turn after it. Repair it on the way in rather than leaving the session
+	// unusable.
+	provider.NormalizeToolArgs(msgs)
 	a.messages = a.messages[:1]
 	for _, m := range msgs {
 		if m.Role == provider.System {

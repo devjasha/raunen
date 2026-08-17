@@ -322,9 +322,47 @@ func (c *Client) Stream(ctx context.Context, msgs []Message, tools []ToolSchema,
 			// Some local servers omit IDs; the loop needs one to correlate results.
 			tc.ID = fmt.Sprintf("call_%d_%d", i, time.Now().UnixNano())
 		}
+		tc.Function.Arguments = objectArgs(tc.Function.Arguments)
 		out.ToolCalls = append(out.ToolCalls, *tc)
 	}
 	return out, usage, nil
+}
+
+// objectArgs makes a tool call's arguments something that can be sent back.
+//
+// A tool that takes no arguments is often called with none at all: the stream
+// carries a name and nothing else, leaving the field empty. Running it locally
+// is unaffected — an empty argument list is exactly right — but the call goes
+// back with every later request, and a gateway that translates to Anthropic's
+// schema has to put it in a tool_use block, where the input is required to be
+// an object. An empty string is not one, so the endpoint rejects the whole
+// conversation with
+//
+//	messages.N.content.M.tool_use.input: Input should be an object
+//
+// and goes on rejecting it, because the message it objects to is now part of
+// the history and is replayed on every retry.
+//
+// Only the empty case is rewritten. Arguments that are malformed rather than
+// missing are left as the model wrote them: dispatch hands those back as a tool
+// result so the model can correct itself, and quietly turning them into {} would
+// run the tool with no arguments instead of saying anything went wrong.
+func objectArgs(args string) string {
+	if strings.TrimSpace(args) == "" {
+		return "{}"
+	}
+	return args
+}
+
+// NormalizeToolArgs repairs a conversation loaded from disk, so a session saved
+// before the above was fixed can be resumed rather than failing on every turn.
+func NormalizeToolArgs(msgs []Message) {
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			msgs[i].ToolCalls[j].Function.Arguments =
+				objectArgs(msgs[i].ToolCalls[j].Function.Arguments)
+		}
+	}
 }
 
 // ModelInfo is what an endpoint reports about a model. Context and Free are
