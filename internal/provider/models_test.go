@@ -106,3 +106,29 @@ func TestRateLimitIsDistinguishable(t *testing.T) {
 		t.Error("a 500 was reported as a rate limit")
 	}
 }
+
+// A catalogue lists plenty that cannot hold a conversation, and they must not
+// reach a chooser or a fallback ladder.
+func TestIsChatModel(t *testing.T) {
+	cases := []struct {
+		name    string
+		id      string
+		outputs []string
+		want    bool
+	}{
+		{"plain text model", "meta/llama-3", []string{"text"}, true},
+		{"nothing stated is assumed usable", "qwen3:8b", nil, true},
+		// Reachable only through a separate batch endpoint; answers 404 here.
+		{"batch variant", "minimax/minimax-m3:batch", []string{"text"}, false},
+		// Declares text as well as audio, so a looser test would let it
+		// through — and one of these did reach the ladder.
+		{"music model", "google/lyria-3-pro-preview", []string{"text", "audio"}, false},
+		{"image generator", "black-forest/flux", []string{"image"}, false},
+		{"multimodal output", "some/model", []string{"text", "image"}, false},
+	}
+	for _, c := range cases {
+		if got := isChatModel(c.id, c.outputs); got != c.want {
+			t.Errorf("%s: isChatModel(%q, %v) = %v, want %v", c.name, c.id, c.outputs, got, c.want)
+		}
+	}
+}

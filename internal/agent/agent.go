@@ -69,6 +69,13 @@ type Approval struct {
 	Reply chan bool
 }
 
+// Rejected reports that a model was refused outright and will not be tried
+// again this session.
+type Rejected struct {
+	Ref    string
+	Reason string
+}
+
 // Tripped reports that an endpoint has been taken out of rotation after
 // repeated failures.
 type Tripped struct {
@@ -96,6 +103,7 @@ func (Approval) event()       {}
 func (ModeChanged) event()    {}
 func (Trimmed) event()        {}
 func (Tripped) event()        {}
+func (Rejected) event()       {}
 func (TaskStart) event()      {}
 func (TaskEnd) event()        {}
 func (TurnEnd) event()        {}
@@ -259,6 +267,28 @@ func (a *Agent) trim(out chan<- Event) {
 	}
 }
 
+// endpointMessage digs the server's own words out of an error, since those are
+// what a user can act on.
+//
+// The wrapped text carries the classification, the URL and the status before
+// the body, and the body itself is JSON. Both layers are peeled off when they
+// are there, and the whole string is returned when they are not.
+func endpointMessage(err error) string {
+	msg := err.Error()
+	if i := strings.LastIndex(msg, ": "); i >= 0 {
+		msg = msg[i+2:]
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(msg), &body) == nil && body.Error.Message != "" {
+		return body.Error.Message
+	}
+	return strings.TrimSpace(msg)
+}
+
 // lastUser is the index of the most recent user message, or zero if there is
 // none. Everything from there on is the exchange in progress.
 func lastUser(msgs []provider.Message) int {
@@ -364,8 +394,13 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 					continue
 				}
 			case errors.Is(err, provider.ErrModelInvalid):
-				a.hp().LockOut(a.ref, "the endpoint rejected it")
-				if a.escalate("model rejected by the endpoint", out) {
+				// Report what the endpoint said before moving on. It is
+				// usually specific and actionable — "only available through
+				// the Batch API" — and a paraphrase throws that away.
+				why := endpointMessage(err)
+				a.hp().LockOut(a.ref, why)
+				out <- Rejected{Ref: a.ref, Reason: why}
+				if a.escalate("previous model rejected", out) {
 					continue
 				}
 			case errors.Is(err, provider.ErrUnavailable):
@@ -377,8 +412,10 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 				}
 			}
 			// Keep the partial assistant message out of the transcript on
-			// failure; a half-written turn confuses the next request.
-			out <- Failed{Err: err}
+			// failure; a half-written turn confuses the next request. Report
+			// the endpoint's own words rather than the wrapped chain, which
+			// ends in raw JSON.
+			out <- Failed{Err: fmt.Errorf("%s", endpointMessage(err))}
 			return
 		}
 		a.hp().Succeeded(a.ref)

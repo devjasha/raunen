@@ -246,6 +246,10 @@ func freeModels(cfg *config.Config) []agent.Candidate {
 			if !m.Free && !declared {
 				continue
 			}
+			// A music or image model on a ladder is a guaranteed failure.
+			if !m.Chat {
+				continue
+			}
 			ref := name + "/" + m.ID
 			// A declared window wins, then whatever the endpoint reported,
 			// then Ollama's native API, which is the only one that knows what

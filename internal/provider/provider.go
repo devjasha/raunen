@@ -329,6 +329,11 @@ type ModelInfo struct {
 	ID      string
 	Context int
 	Free    bool
+	// Chat reports whether the model can answer a chat completion at all.
+	// Catalogues list plenty that cannot: image and music generators, and on
+	// OpenRouter 61 ":batch" variants that exist only behind a separate batch
+	// endpoint and answer 404 here. Offering those is offering a dead end.
+	Chat bool
 }
 
 // Failures are classified because the right response differs. A rate limit
@@ -355,7 +360,7 @@ func ListModelsDetailed(ctx context.Context, baseURL, apiKey string) ([]ModelInf
 	}
 	out := make([]ModelInfo, 0, len(body.Data))
 	for _, m := range body.Data {
-		info := ModelInfo{ID: m.ID, Context: m.ContextLength}
+		info := ModelInfo{ID: m.ID, Context: m.ContextLength, Chat: isChatModel(m.ID, m.Architecture.OutputModalities)}
 		// Free means it costs nothing to send or receive. Other prices —
 		// images, web search — do not decide whether a chat turn is free.
 		prompt, okP := price(m.Pricing["prompt"])
@@ -364,6 +369,31 @@ func ListModelsDetailed(ctx context.Context, baseURL, apiKey string) ([]ModelInf
 		out = append(out, info)
 	}
 	return out, nil
+}
+
+// isChatModel reports whether a model can serve a chat completion.
+//
+// Nothing in a catalogue states this reliably, so it is decided from what is
+// stated: a model that does not output text cannot answer, and OpenRouter's
+// ":batch" suffix marks a variant reachable only through its batch endpoint.
+// An endpoint that says nothing about modalities — every local runtime — is
+// taken at its word and assumed usable.
+func isChatModel(id string, outputs []string) bool {
+	if strings.HasSuffix(id, ":batch") {
+		return false
+	}
+	if len(outputs) == 0 {
+		return true
+	}
+	// Every output must be text. Merely including text is not enough: a music
+	// model declares "text+audio" and would pass that test while being useless
+	// for a conversation — one of them ended up on the fallback ladder.
+	for _, o := range outputs {
+		if o != "text" {
+			return false
+		}
+	}
+	return true
 }
 
 // price reads a per-token price, which arrives inconsistently: usually a
@@ -395,7 +425,10 @@ type modelsBody struct {
 		ContextLength int    `json:"context_length"`
 		// Held raw: the shape varies per model, and a single odd entry must not
 		// fail the whole catalogue.
-		Pricing map[string]json.RawMessage `json:"pricing"`
+		Pricing      map[string]json.RawMessage `json:"pricing"`
+		Architecture struct {
+			OutputModalities []string `json:"output_modalities"`
+		} `json:"architecture"`
 	} `json:"data"`
 }
 
@@ -434,6 +467,9 @@ func ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
 	}
 	out := make([]string, 0, len(body.Data))
 	for _, m := range body.Data {
+		if !isChatModel(m.ID, m.Architecture.OutputModalities) {
+			continue
+		}
 		out = append(out, m.ID)
 	}
 	return out, nil

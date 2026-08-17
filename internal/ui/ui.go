@@ -924,6 +924,15 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		})
 		return *m, next
 
+	case agent.Rejected:
+		m.push(entry{
+			first: "  " + errStyle.Render("✗ "),
+			cont:  "    ",
+			text: errStyle.Render(e.Ref+" refused") +
+				dimStyle.Render("  — "+e.Reason),
+		})
+		return *m, next
+
 	case agent.Tripped:
 		m.push(entry{
 			first: "  " + askStyle.Render("⚠ "),

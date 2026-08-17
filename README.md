@@ -508,7 +508,23 @@ move:
 }
 ```
 
-`/model` reaches every model these endpoints serve regardless of the ladder.
+`/model` reaches every model these endpoints serve regardless of the ladder —
+except the ones that cannot hold a conversation, which are filtered out
+everywhere. A catalogue lists plenty of those: OpenRouter has 61 `:batch`
+variants reachable only through a separate batch endpoint, and image and music
+models sit alongside the chat ones. A model only counts as usable if everything
+it outputs is text, since a music model declares `text+audio` and would
+otherwise pass — one of them reached the fallback ladder before this check
+existed.
+
+When an endpoint does refuse a model, its own words are shown rather than a
+paraphrase, because they are usually specific enough to act on:
+
+```
+✗ openrouter/minimax/minimax-m3:batch refused
+  — This model is only available through the Batch API.
+⇅ switched to openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+```
 
 **"Free" means no per-token cost, not no account.** OpenRouter's free models
 still need `OPENROUTER_API_KEY`; without it they return `401`. Rungs whose key
