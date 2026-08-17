@@ -150,6 +150,13 @@ type Model struct {
 	// scroll is how many display rows the view is lifted off the bottom. Zero
 	// means pinned to the newest output.
 	scroll int
+	// owner maps each display row back to the entry that produced it, which is
+	// what makes a click resolvable to a message.
+	owner []int
+	// blockSeq numbers messages; block starts bump it.
+	blockSeq int
+	// replyTo is the message being replied to, quoted into the next send.
+	replyTo string
 
 	// pending is assistant text received but not yet turned into whole lines.
 	pending string
@@ -303,6 +310,9 @@ type entry struct {
 	// first prefixes the opening row, cont every row after it.
 	first, cont string
 	text        string
+	// block groups the lines that belong to one message, so clicking any line of
+	// a reply selects the reply rather than the line.
+	block int
 	// rule makes this a turn separator drawn to the full width, optionally
 	// labelled with stamp. It is re-rendered on resize rather than stored, so
 	// the rule always spans the terminal.
@@ -337,9 +347,58 @@ func (e entry) rows(width int) []string {
 
 // push appends an entry. When the view is scrolled back it is nudged to keep
 // showing the same content rather than jumping to the bottom under the reader.
+// onClick picks the message under the pointer to reply to, the way a messaging
+// app does. Clicking the same message again, or empty space, clears it.
+func (m *Model) onClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	if mouse.Button != tea.MouseLeft {
+		return *m, nil
+	}
+	i := m.entryAtRow(mouse.Y)
+	if i < 0 {
+		m.replyTo = ""
+		return *m, nil
+	}
+
+	quote := m.blockText(m.entries[i].block)
+	if quote == "" || quote == m.replyTo {
+		// A second click on the same message means "never mind".
+		m.replyTo = ""
+		return *m, nil
+	}
+	m.replyTo = quote
+	return *m, nil
+}
+
+// blockText gathers a whole message as plain text, styling removed: it is going
+// to the model as a quote, and escape codes would only cost tokens.
+func (m Model) blockText(block int) string {
+	var lines []string
+	for _, e := range m.entries {
+		if e.block != block || e.rule {
+			continue
+		}
+		lines = append(lines, strings.TrimRight(ansi.Strip(e.first+e.text), " "))
+	}
+	// Blank lines at either end carry nothing into a quote.
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// newBlock starts a new message, so a click can select one whole.
+func (m *Model) newBlock() { m.blockSeq++ }
+
 func (m *Model) push(e entry) {
+	e.block = m.blockSeq
 	m.entries = append(m.entries, e)
 	rows := e.rows(m.innerWidth())
+	for range rows {
+		m.owner = append(m.owner, len(m.entries)-1)
+	}
 	m.display = append(m.display, rows...)
 	if m.scroll > 0 {
 		m.scroll += len(rows)
@@ -362,8 +421,13 @@ func (m *Model) add(lines ...string) {
 func (m *Model) rewrap() {
 	m.wrapWidth = m.innerWidth()
 	m.display = m.display[:0]
-	for _, e := range m.entries {
-		m.display = append(m.display, e.rows(m.innerWidth())...)
+	m.owner = m.owner[:0]
+	for i, e := range m.entries {
+		rows := e.rows(m.innerWidth())
+		for range rows {
+			m.owner = append(m.owner, i)
+		}
+		m.display = append(m.display, rows...)
 	}
 }
 
@@ -431,6 +495,9 @@ func (m Model) viewHeight() int {
 	if m.sub != nil {
 		h -= m.sub.height()
 	}
+	if m.replyTo != "" {
+		h--
+	}
 	return max(1, h)
 }
 
@@ -451,6 +518,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
+
+	case tea.MouseClickMsg:
+		return m.onClick(msg.Mouse())
+
+	case tea.MouseWheelMsg:
+		// The alternate screen took the terminal's own scrolling, so the wheel
+		// has to be handled here or it does nothing at all.
+		switch msg.Mouse().Button {
+		case tea.MouseWheelUp:
+			m.scroll += 3
+		case tea.MouseWheelDown:
+			m.scroll -= 3
+		}
+		m.clampScroll()
+		return m, nil
 
 	case tickMsg:
 		if !m.busy {
@@ -609,6 +691,11 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return *m, tea.Quit
 
 	case "esc":
+		// A pending reply is the nearest thing to undo, so it goes first.
+		if m.replyTo != "" {
+			m.replyTo = ""
+			return *m, nil
+		}
 		if m.busy {
 			m.cancel()
 		}
@@ -762,9 +849,22 @@ func (m *Model) blank() {
 // openTurn marks the start of an exchange: a dim rule carrying the time, then
 // the question against a coloured bar. The rule is the main thing that makes a
 // long conversation scannable — it is where the eye lands when scrolling back.
-func (m *Model) openTurn(text string) {
+func (m *Model) openTurn(text, quote string) {
 	m.blank()
+	m.newBlock()
 	m.push(entry{rule: true, stamp: time.Now().Format("15:04")})
+	// What is being replied to, shown the way a messaging app shows it: above
+	// the message, quieter than it, and clearly not something you typed.
+	for _, l := range strings.Split(quote, "\n") {
+		if quote == "" {
+			break
+		}
+		m.push(entry{
+			first: dimStyle.Render("│ "),
+			cont:  dimStyle.Render("│ "),
+			text:  quoteStyle.Render(l),
+		})
+	}
 	m.push(entry{
 		first: barStyle.Render("▌ "),
 		cont:  barStyle.Render("▌ "),
@@ -789,6 +889,21 @@ func (m *Model) answer(ok bool) {
 
 // send starts a turn and begins pumping events from the agent.
 func (m *Model) send(text string) (tea.Model, tea.Cmd) {
+	// A reply carries what it is replying to, so the model does not have to
+	// guess which part of a long answer is meant. Markdown quoting is what it
+	// already understands. The quote is kept out of the echoed message so the
+	// transcript shows it as a quote rather than as something you typed.
+	quote := m.replyTo
+	m.replyTo = ""
+	sent := text
+	if quote != "" {
+		var q strings.Builder
+		for _, l := range strings.Split(quote, "\n") {
+			q.WriteString("> " + l + "\n")
+		}
+		q.WriteString("\n" + text)
+		sent = q.String()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.busy = true
@@ -805,9 +920,9 @@ func (m *Model) send(text string) (tea.Model, tea.Cmd) {
 	// The input stays focused while the model works so the next message can be
 	// composed in the meantime. Enter is ignored until the turn finishes, and
 	// the typed text simply stays in the box.
-	go m.ag.Run(ctx, text, m.events)
+	go m.ag.Run(ctx, sent, m.events)
 
-	m.openTurn(text)
+	m.openTurn(text, quote)
 	return *m, tea.Batch(waitFor(m.events), tick())
 }
 
@@ -833,6 +948,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		if e.Depth == 0 {
 			m.comp.Tools++
 		}
+		m.newBlock()
 		// Delegation announces itself through TaskStart, which opens the panel.
 		// Reporting the call as an ordinary tool as well says it twice.
 		if e.Name == "task" && e.Depth == 0 {
@@ -967,8 +1083,9 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.Trimmed:
-		m.add(dimStyle.Render(fmt.Sprintf(
-			"⋯ dropped %d earlier messages to fit the context", e.Messages)))
+		m.add(askStyle.Render(fmt.Sprintf("⋯ dropped %d earlier messages", e.Messages)) +
+			dimStyle.Render("  — no roomier model to switch to, so the agent may"+
+				" repeat work it has already done"))
 		return *m, next
 
 	case agent.TurnEnd:
@@ -1021,6 +1138,9 @@ func (m *Model) addText(lines []string) {
 	if !m.inText {
 		m.inText = true
 		m.blank()
+		// The reply is its own message, so a click anywhere in it quotes all
+		// of it rather than the one line under the pointer.
+		m.newBlock()
 	}
 	for _, l := range lines {
 		m.push(m.md.entry(l))
@@ -1174,6 +1294,10 @@ func (m Model) View() tea.View {
 	v.BackgroundColor = nil
 	// The whole screen is ours, which is the only way to hold the input still.
 	v.AltScreen = true
+	// Clicks pick a message to reply to and the wheel scrolls the transcript.
+	// The cost is that the terminal's own click-drag selection goes to the
+	// program instead, which on the alternate screen was already limited.
+	v.MouseMode = tea.MouseModeCellMotion
 
 	if m.quit {
 		return v
@@ -1225,6 +1349,16 @@ func (m Model) View() tea.View {
 		status = dimStyle.Render(fmt.Sprintf("↑ %d %s below · pgdn to follow", m.scroll, unit))
 	}
 	rows = append(rows, status)
+	if m.replyTo != "" {
+		first := strings.SplitN(m.replyTo, "\n", 2)[0]
+		more := ""
+		if n := strings.Count(m.replyTo, "\n"); n > 0 {
+			more = fmt.Sprintf(" +%d lines", n)
+		}
+		rows = append(rows, dimStyle.Render("↩ replying to ")+
+			quoteStyle.Render(ansi.Truncate(first, max(10, m.innerWidth()-28), "…"))+
+			dimStyle.Render(more+"  esc to drop"))
+	}
 	rows = append(rows, strings.Split(m.box(), "\n")...)
 	// The bar sits under the input: where you are and how full the context is
 	// are reference, not something to read past on the way to typing.
@@ -1263,6 +1397,9 @@ func (m Model) View() tea.View {
 	if cur := m.input.Cursor(); cur != nil {
 		// Past the transcript, the status row and the input's top border.
 		below := m.viewHeight() + 2
+		if m.replyTo != "" {
+			below++
+		}
 		if m.sub != nil {
 			below += m.sub.height()
 		}
@@ -1279,6 +1416,33 @@ func (m Model) View() tea.View {
 // transcript returns exactly viewHeight rows: the conversation from the top of
 // the screen down, with blank rows filling whatever is left above the input.
 // Once there is more content than fits, the newest end is what is shown.
+// visibleStart is the index into content() of the topmost visible row. The
+// renderer and the click handler both derive their positions from it, so they
+// cannot disagree about which row a click landed on.
+func (m Model) visibleStart() int {
+	h := m.viewHeight()
+	end := len(m.content()) - m.scroll
+	if end < 0 {
+		end = 0
+	}
+	return max(0, end-h)
+}
+
+// entryAtRow resolves a screen row to a transcript entry, or -1.
+//
+// Rows past the transcript belong to the live thinking block, which is not part
+// of the conversation and has nothing to reply to.
+func (m Model) entryAtRow(row int) int {
+	if row < 0 || row >= m.viewHeight() {
+		return -1
+	}
+	idx := m.visibleStart() + row
+	if idx < 0 || idx >= len(m.owner) {
+		return -1
+	}
+	return m.owner[idx]
+}
+
 func (m Model) transcript() []string {
 	h := m.viewHeight()
 

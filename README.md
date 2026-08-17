@@ -199,6 +199,8 @@ raunen -version                     # print the version
 | `pgup` / `pgdn` | scroll the transcript |
 | `shift+↑` / `shift+↓` | scroll by a line |
 | `y` / `n` | answer an approval prompt |
+| click a reply | quote it in the input |
+| mouse wheel | scroll the transcript |
 
 | Command | |
 |---|---|
@@ -330,6 +332,43 @@ That is an allowlist rather than a denylist of dangerous commands, deliberately:
 there is no way to enumerate every way a shell can change something, and a wrong
 "this is safe" writes to your disk. The cost is that plan mode sometimes refuses
 a harmless command it does not recognise.
+
+## Replying to a message
+
+Click any line of a reply and it becomes the thing you are answering, the way a
+messaging app does:
+
+```
+  ↩ replying to apple +2 lines  esc to drop
+  ╭──────────────────────────────────────────────────────────╮
+  │ › which of these is a stone fruit?                       │
+  ╰──────────────────────────────────────────────────────────╯
+```
+
+The whole message is selected, not the line under the pointer — transcript lines
+are grouped into messages, so clicking the middle of a reply quotes all of it.
+Clicking it again, or clicking empty space, drops the reply; so does `esc`.
+
+It is sent as a markdown quote, which the model already understands, and the
+transcript shows it as one:
+
+```
+  ─────────────────────────────────────────────────── 11:20
+  │ apple
+  │ banana
+  │ cherry
+  ▌ which of these is a stone fruit?
+
+  A cherry is a stone fruit (also called a drupe) …
+```
+
+**The mouse wheel scrolls the transcript**, which matters more than usual here:
+the alternate screen took the terminal's own scrolling, so without this the wheel
+did nothing.
+
+Enabling the mouse has a cost worth stating: click-drag selection now goes to
+raunen rather than to your terminal. On the alternate screen that was already
+limited, and `pgup`/`pgdn` still work, but it is a trade rather than a free win.
 
 ## The companion
 
@@ -779,6 +818,17 @@ Size it against your RAM, not just the model: 16384 on a 16 GB machine running a
 9.7B model ran out of memory and dropped connections mid-response. Check what
 you are actually getting with `ollama ps` — the `CONTEXT` column is the truth.
 `RAUNEN_DEBUG=1` prints per-request token accounting on stderr.
+
+**Growing beats shrinking.** When a conversation outgrows the window, raunen
+climbs the fallback ladder first and only trims if there is nowhere left to
+climb. Dropping earlier tool results makes the model forget what it has already
+found and investigate the same thing again, which is a worse outcome than a
+large request — so trimming is the last resort, and it says so when it happens:
+
+```
+⋯ dropped 4 earlier messages — no roomier model to switch to, so the agent
+  may repeat work it has already done
+```
 
 **Two mechanisms keep requests inside the window.** Tool output is capped
 relative to the context, about a quarter of it per result — a fixed 30 KB cap is

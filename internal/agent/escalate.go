@@ -92,6 +92,22 @@ func (a *Agent) escalate(reason string, out chan<- Event) bool {
 	return true
 }
 
+// wouldTrim reports whether the request has to be shrunk to fit — which is the
+// signal to look for a roomier model, since shrinking costs the model its
+// memory of what it has already done.
+func (a *Agent) wouldTrim() bool {
+	if a.contextTokens <= 0 {
+		return false
+	}
+	return estimateTokens(a.messages) > a.trimBudget()
+}
+
+// trimBudget is what the conversation may occupy, leaving room for the schemas
+// sent alongside it and for the reply.
+func (a *Agent) trimBudget() int {
+	return a.contextTokens*6/10 - a.overhead()
+}
+
 // needsMoreRoom reports whether the next request is close enough to the ceiling
 // that trimming alone will not save it.
 //

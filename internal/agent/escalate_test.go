@@ -132,3 +132,87 @@ func TestNeedsMoreRoomSilentWithoutAContext(t *testing.T) {
 		t.Error("reported tight with no declared context")
 	}
 }
+
+// Dropping earlier tool results makes the model forget what it found and repeat
+// the work, so a roomier model must be preferred over trimming. This pins the
+// order: escalate while anything is left on the ladder, trim only after.
+func TestEscalationIsPreferredOverTrimming(t *testing.T) {
+	a := &Agent{
+		ref: "ollama/small", contextTokens: 1000, autoSwitch: true,
+		fallbacks: []Candidate{{Ref: "cloud/big", Context: 100_000}},
+	}
+	a.messages = []provider.Message{
+		{Role: provider.System, Content: "sys"},
+		{Role: provider.User, Content: "find the bug"},
+	}
+	// Enough accumulated work to overflow the small window.
+	for i := 0; i < 6; i++ {
+		a.messages = append(a.messages,
+			provider.Message{Role: provider.Assistant, ToolCalls: []provider.ToolCall{
+				{ID: "c", Function: provider.Function{Name: "read", Arguments: "{}"}},
+			}},
+			provider.Message{Role: provider.ToolRole, ToolCallID: "c", Content: strings.Repeat("x", 400)},
+		)
+	}
+	before := len(a.messages)
+
+	if !a.wouldTrim() {
+		t.Fatal("the conversation should not fit the small window")
+	}
+
+	out := make(chan Event, 8)
+	// The loop escalates while it would otherwise trim.
+	for a.wouldTrim() {
+		if !a.escalate("context full", out) {
+			break
+		}
+	}
+	a.trim(out)
+	close(out)
+
+	if a.ref != "cloud/big" {
+		t.Errorf("model = %s, want cloud/big — it should grow before dropping", a.ref)
+	}
+	if len(a.messages) != before {
+		t.Errorf("messages = %d, want %d kept: nothing should be dropped once it fits",
+			len(a.messages), before)
+	}
+	for ev := range out {
+		if _, ok := ev.(Trimmed); ok {
+			t.Error("trimmed despite a roomier model being available")
+		}
+	}
+}
+
+// With nowhere to grow, trimming is still the fallback — a turn that cannot be
+// sent is worse than one that lost some history.
+func TestTrimmingRemainsTheLastResort(t *testing.T) {
+	a := &Agent{ref: "ollama/small", contextTokens: 1000, autoSwitch: true}
+	a.messages = []provider.Message{
+		{Role: provider.System, Content: "sys"},
+		{Role: provider.User, Content: "q"},
+	}
+	for i := 0; i < 6; i++ {
+		a.messages = append(a.messages,
+			provider.Message{Role: provider.User, Content: strings.Repeat("x", 400)})
+	}
+
+	out := make(chan Event, 8)
+	for a.wouldTrim() {
+		if !a.escalate("context full", out) {
+			break
+		}
+	}
+	a.trim(out)
+	close(out)
+
+	var trimmed bool
+	for ev := range out {
+		if _, ok := ev.(Trimmed); ok {
+			trimmed = true
+		}
+	}
+	if !trimmed {
+		t.Error("nothing was trimmed and there was nowhere to escalate")
+	}
+}

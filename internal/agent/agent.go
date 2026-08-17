@@ -229,8 +229,7 @@ func (a *Agent) trim(out chan<- Event) {
 	if a.contextTokens <= 0 {
 		return
 	}
-	// Leave room for the reply as well as the prompt.
-	budget := a.contextTokens*6/10 - a.overhead()
+	budget := a.trimBudget()
 	if estimateTokens(a.messages) <= budget {
 		return
 	}
@@ -263,6 +262,7 @@ func (a *Agent) trim(out chan<- Event) {
 	}
 
 	if dropped > 0 {
+		// Only ever a last resort: the ladder had nowhere left to go.
 		out <- Trimmed{Messages: dropped}
 	}
 }
@@ -369,13 +369,22 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 	a.rung = 0
 
 	for step := 0; step < steps; step++ {
-		a.trim(out)
-
-		// Move up the ladder before sending, when what cannot be trimmed away
-		// already fills most of the window.
-		if reason, tight := a.needsMoreRoom(); tight {
-			a.escalate(reason, out)
+		// Grow before shrinking. Dropping earlier tool results makes the model
+		// forget what it already found and investigate the same thing again,
+		// which is worse than the request being large — so every rung of the
+		// ladder is tried before anything is thrown away.
+		for a.wouldTrim() {
+			reason := fmt.Sprintf("context full at %d tokens", a.contextTokens)
+			if why, tight := a.needsMoreRoom(); tight {
+				reason = why
+			}
+			if !a.escalate(reason, out) {
+				break
+			}
 		}
+		// Only reached if the ladder ran out, and a no-op if the request now
+		// fits on a roomier model.
+		a.trim(out)
 
 		msg, usage, err := a.client.Stream(ctx, a.messages, schemas, provider.Handler{
 			Text:      func(s string) { out <- TextDelta{Text: s} },
