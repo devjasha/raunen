@@ -484,7 +484,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, textarea.Blink
 	}
 
+	// Anything not handled above goes to whatever currently owns the keyboard,
+	// which is not always the main input. Bracketed paste is the case that
+	// exposed this: it arrives as its own message rather than as key presses, so
+	// routing everything to the input by default put a pasted API key into the
+	// conversation instead of into the prompt asking for it.
 	var cmd tea.Cmd
+	switch {
+	case m.keyAsk != nil:
+		m.keyAsk.input, cmd = m.keyAsk.input.Update(msg)
+		return m, cmd
+
+	case m.pick != nil:
+		// The chooser has no widget of its own, so a paste narrows the filter.
+		if p, ok := msg.(tea.PasteMsg); ok {
+			m.pick.filter += p.Content
+			m.pick.apply()
+		}
+		return m, nil
+
+	case m.ask != nil:
+		// An approval takes y or n. Anything else, pasted included, is not an
+		// answer and must not leak into the input behind it.
+		return m, nil
+	}
+
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
 }

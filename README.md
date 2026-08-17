@@ -261,7 +261,11 @@ few seconds later, by which time the moment has passed. Instead a prompt opens:
 ╰──────────────────────────────────────────────────────────────╯
 ```
 
-Input is masked, and the key is written to the config with `0600` permissions.
+Input is masked, and pasting goes where you are looking: bracketed paste arrives
+as its own kind of message rather than as key presses, so an overlay has to claim
+it explicitly or a pasted key ends up in the conversation instead.
+
+The key is written to the config with `0600` permissions.
 An environment variable is still the better place for a secret, which is why the
 prompt names the one this provider reads.
 
