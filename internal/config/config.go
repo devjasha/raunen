@@ -193,7 +193,10 @@ func defaults() *Config {
 			// model supports; raise OLLAMA_CONTEXT_LENGTH and this together.
 			"ollama":   {BaseURL: "http://localhost:11434/v1", Context: 4096},
 			"lmstudio": {BaseURL: "http://localhost:1234/v1"},
-			"llamacpp": {BaseURL: "http://localhost:8080/v1"},
+			// A local gateway. No key: it binds to localhost and trusts local
+			// callers, so declaring one would only make it look unavailable.
+			"omniroute": {BaseURL: "http://localhost:20128/v1"},
+			"llamacpp":  {BaseURL: "http://localhost:8080/v1"},
 			"ollama-cloud": {
 				BaseURL:   "https://ollama.com/v1",
 				APIKeyEnv: "OLLAMA_API_KEY",

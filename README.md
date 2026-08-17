@@ -578,6 +578,43 @@ Without it you still get a working agent and a raw token count — just no usage
 percentage, no history trimming, and no automatic switching, all of which need
 something to measure against.
 
+### OmniRoute and other gateways
+
+A gateway speaks the same wire format, so it is a provider like any other. For
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute), which ships in the
+default config:
+
+```json
+"omniroute": { "base_url": "http://localhost:20128/v1" }
+```
+
+No key: it binds to localhost and trusts local callers, so declaring one would
+only make raunen report it as unavailable. If you have exposed yours or
+configured it to require a key, add one with `/key omniroute`.
+
+Its `auto/*` combinations work as models — `omniroute/auto/best-coding` routes
+per request on its side while raunen treats it as one endpoint:
+
+```
+auto · ⎇ main · auto/best-coding · ★6
+
+  ▌ read go.mod and tell me the module name and go version
+
+    ⏺ read  go.mod
+      ↳ 28 lines
+
+  The module is named raunen and uses Go 1.25.0.
+```
+
+It reports `context_length` per model, so windows are discovered rather than
+declared — `auto/best-coding` comes through as 1,048,576 tokens and the usage bar
+works without any configuration.
+
+It is deliberately **not** marked `"free": true`. A gateway routes to whatever it
+has been given, which may include paid providers, so raunen will not claim its
+models cost nothing. If yours only has free providers configured, add the flag
+and its catalogue joins the fallback ladder.
+
 ### Cloud models
 
 `ollama-cloud` is configured out of the box. Create a key at
