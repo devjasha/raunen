@@ -41,6 +41,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"raunen/internal/agent"
+	"raunen/internal/companion"
 	"raunen/internal/config"
 	"raunen/internal/provider"
 	"raunen/internal/session"
@@ -174,6 +175,9 @@ type Model struct {
 	warnedFull bool
 	// sess is the conversation on disk, written after each turn.
 	sess *session.Session
+	// comp is the mascot's progress, which spans every session and provider
+	// rather than belonging to any one of them.
+	comp *companion.Companion
 	// sub is the panel a running sub-agent works in, nil when none is running.
 	sub *subView
 	// queued is a message typed while the agent was busy. The model cannot take
@@ -193,7 +197,7 @@ type Model struct {
 	quit   bool
 }
 
-func New(cfg *config.Config, ag *agent.Agent, root, ref string, sess *session.Session) Model {
+func New(cfg *config.Config, ag *agent.Agent, root, ref string, sess *session.Session, comp *companion.Companion) Model {
 	ti := textarea.New()
 	ti.Placeholder = "ask something, or /help"
 	ti.ShowLineNumbers = false
@@ -235,6 +239,7 @@ func New(cfg *config.Config, ag *agent.Agent, root, ref string, sess *session.Se
 		root:   root,
 		ref:    ref,
 		sess:   sess,
+		comp:   comp,
 		branch: vcs.Branch(root),
 		input:  ti,
 		width:  80,
@@ -734,6 +739,11 @@ func (m *Model) persist() {
 	// Keep the advertised title current, so the picker shows what this
 	// instance is about rather than "(new session)".
 	m.sess.UpdateTitle()
+	// Saved alongside the session: the companion outlives it, so losing a level
+	// to a crash would be a shame.
+	if err := m.comp.Save(); err != nil {
+		m.add(errStyle.Render("✗ could not save the companion: " + err.Error()))
+	}
 }
 
 // blank pushes a separating line, but only when the transcript does not
@@ -820,6 +830,9 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.ToolStart:
+		if e.Depth == 0 {
+			m.comp.Tools++
+		}
 		// Delegation announces itself through TaskStart, which opens the panel.
 		// Reporting the call as an ordinary tool as well says it twice.
 		if e.Name == "task" && e.Depth == 0 {
@@ -863,6 +876,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.TaskStart:
+		m.comp.Tasks++
 		m.think = ""
 		m.flush()
 		m.inText = false
@@ -892,6 +906,16 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 
 	case agent.Usage:
 		m.ctxTokens = e.Total
+		// Context is the one thing every provider charges in, so it is what the
+		// companion grows on — whichever model happened to serve this request.
+		if before, after := m.comp.Feed(m.ref, int64(e.Total)); after > before {
+			m.push(entry{
+				first: "  " + levelStyle.Render("★ "),
+				cont:  "    ",
+				text: levelStyle.Render(fmt.Sprintf("level %d — %s", after, m.comp.Title())) +
+					dimStyle.Render("  /companion"),
+			})
+		}
 		// Warn before the window overflows rather than after: once the server
 		// starts truncating, the model loses the question it was asked and
 		// begins answering something else entirely.
@@ -949,6 +973,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 
 	case agent.TurnEnd:
 		m.think = ""
+		m.comp.Turns++
 		// Cheap, and catches a branch the agent itself switched.
 		m.branch = vcs.Branch(m.root)
 		m.flush()
@@ -1098,6 +1123,12 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		m.keyAsk = newKeyPrompt(name, p.APIKeyEnv, "")
 		return *m, nil
 
+	case "/companion", "/comp":
+		for _, e := range m.companionRows() {
+			m.push(e)
+		}
+		return *m, nil
+
 	case "/status":
 		m.status()
 		return *m, probeProviders(m.cfg)
@@ -1113,6 +1144,7 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 			"  /model                   choose a model from a list",
 			"  /model <provider/model>  switch directly",
 			"  /status                  model, context, ladder, endpoints",
+			"  /companion               your dragon's level and what fed it",
 			"  /providers               list configured endpoints",
 			"  /key <provider>          add an api key",
 			"  /clear                   start a new session",
@@ -1254,7 +1286,9 @@ func (m Model) transcript() []string {
 	// part of the transcript, so it disappears the moment there is real content
 	// and never has to be scrolled past.
 	if len(m.entries) == 0 {
-		if art := welcomeRows(m.innerWidth(), h, m.ag.Model(), m.ag.Mode().String(), shortRoot(m.root)); art != nil {
+		companionLine := fmt.Sprintf("★ %d %s", m.comp.Level(), m.comp.Title())
+		if art := welcomeRows(m.innerWidth(), h, m.comp.Level(), m.ag.Model(),
+			m.ag.Mode().String(), shortRoot(m.root), companionLine); art != nil {
 			rows := make([]string, 0, h)
 			// Sit the block a little above centre, where the eye expects it.
 			for i := 0; i < max(0, (h-len(art))/3); i++ {
@@ -1312,6 +1346,9 @@ func (m Model) bar() string {
 	if u := m.usage(); u != "" {
 		parts = append(parts, u)
 	}
+	// Last, so it is the first thing dropped on a narrow terminal: a level is
+	// the least urgent thing on the line.
+	parts = append(parts, levelStyle.Render(fmt.Sprintf("★%d", m.comp.Level())))
 
 	// Trimmed from the right, so the mode — the thing that changes what a
 	// keystroke does — is the last to go.
@@ -1353,15 +1390,20 @@ func (m Model) contextNearlyFull() bool {
 	return limit > 0 && m.ctxTokens*100/limit >= 85
 }
 
-// humanTokens renders a token count compactly: 940, 1.2k, 24k.
+// humanTokens renders a token count compactly: 940, 1.2k, 24k, 2.4M. The
+// companion deals in millions, so "2400k" would be a poor way to say it.
 func humanTokens(n int) string {
 	switch {
 	case n < 1000:
 		return fmt.Sprintf("%d", n)
-	case n < 10000:
+	case n < 10_000:
 		return fmt.Sprintf("%.1fk", float64(n)/1000)
-	default:
+	case n < 1_000_000:
 		return fmt.Sprintf("%dk", n/1000)
+	case n < 10_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	default:
+		return fmt.Sprintf("%dM", n/1_000_000)
 	}
 }
 

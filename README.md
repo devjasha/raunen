@@ -205,6 +205,7 @@ raunen -version                     # print the version
 | `/model` | choose a model from a list |
 | `/model <provider/model>` | switch directly |
 | `/status` | model, context, ladder and endpoints on one screen |
+| `/companion` | your dragon's level and what fed it |
 | `/providers` | list configured endpoints |
 | `/key <provider>` | add an API key |
 | `/sessions` | list saved sessions |
@@ -329,6 +330,56 @@ That is an allowlist rather than a denylist of dangerous commands, deliberately:
 there is no way to enumerate every way a shell can change something, and a wrong
 "this is safe" writes to your disk. The cost is that plan mode sometimes refuses
 a harmless command it does not recognise.
+
+## The companion
+
+The dragon is not decoration: it grows on the one thing every provider charges
+in, which is context. `/companion` shows where it is up to.
+
+```
+─────────────────────────────────────────────────────── companion
+                    \||/
+                    |  @___oo
+          /\  /\   / (__,,,,|
+         ) /^\) ^\/ _)
+         )   /^\/   _)
+         )   _ /  / _)
+     /\  )/\/ ||  | )_)
+    <  >      |(,,) )__)
+     ||      /    \)___)\
+     | \____(      )___) )___
+      \______(_______;;; __;;;
+
+  level     8  Bellow
+  progress  ███░░░░░░░░░░░░░░░░░  2.1M to Roar
+  context   2.4M tokens across 214 turns
+  work      512 tool calls  ·  31 delegated tasks
+  hatched   2 days ago
+  fed by    3 models
+            openrouter/nvidia/nemotron-3.5-lightning:free  1.2M  50%
+            ollama/qwen3.5-8k:latest                        900k  37%
+            groq/llama-3.3                                  300k  12%
+```
+
+**It is yours, not a model's.** Tokens from every provider go into the same
+total, and the breakdown is there to make that visible: a local 8k model and a
+hosted 1M one feed the same dragon. Switching model or starting a session
+carries it forward — the state lives in `~/.local/share/raunen/companion.json`,
+alongside your sessions rather than in any config.
+
+Ten levels, named from quiet to loud, since raunen is to murmur: **Hush,
+Whisper, Murmur, Rumour, Echo, Chant, Chorus, Bellow, Roar, Thunder**. The first
+few arrive within a session or two so there is something to see; the last is a
+genuine haul at ten million tokens.
+
+**It grows visibly.** An egg through level 3, a coiled young dragon to level 6,
+and the full thing from 7 — on the welcome screen as well as in `/companion`, so
+progress is something you notice rather than a number you look up. A level-up
+appears in the transcript as it happens, and the level rides along in the status
+bar as `★8`.
+
+The bar drops it first when the terminal is narrow. A level is the least urgent
+thing on that line.
 
 ## Sessions
 
@@ -790,6 +841,7 @@ resize — wrapping is redone at the new width rather than baked in.
 ```
 main.go                    CLI entry, one-shot mode
 internal/agent             the tool-use loop, modes, history trimming
+internal/companion         the mascot's progress across sessions
 internal/config            providers and models
 internal/provider          OpenAI-compatible streaming client
 internal/session           saving, resuming, running instances

@@ -47,10 +47,17 @@ var smallDragon = []string{
 // welcomeRows renders the splash shown while the transcript is empty, centred
 // in the space available. It returns nil when there is not even room for the
 // small version, so a very short terminal simply starts with an empty screen.
-func welcomeRows(width, height int, model, mode, root string) []string {
-	art, gap := dragon, 2
-	if height < len(dragon)+8 || width < 46 {
+func welcomeRows(width, height, stageLevel int, model, mode, root, level string) []string {
+	// The art follows the companion's stage, so the first thing you see is how
+	// far along it is.
+	art, gap := stageArt(stageLevel), 2
+	if height < len(art)+8 || width < 46 {
+		// Too small for the full picture; the coiled one still reads as the
+		// same creature.
 		art, gap = smallDragon, 1
+		if stageLevel <= 3 {
+			art = hatchling
+		}
 	}
 	if height < len(art)+5 {
 		return nil
@@ -84,7 +91,7 @@ func welcomeRows(width, height int, model, mode, root string) []string {
 	lines = append(lines,
 		nameStyle.Render("raunen")+taglineStyle.Render(tagline),
 		"",
-		taglineStyle.Render(meta),
+		levelStyle.Render(level)+taglineStyle.Render("  ·  "+meta),
 		taglineStyle.Render(hint),
 	)
 

@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"raunen/internal/agent"
+	"raunen/internal/companion"
 	"raunen/internal/config"
 	"raunen/internal/provider"
 	"raunen/internal/session"
@@ -138,8 +139,9 @@ func run() error {
 	// The alternate screen is handed back on exit and the terminal is left as
 	// it was found. The conversation is not replayed into it — sessions are
 	// saved to disk instead, and resumed with --continue or /resume.
+	comp := companion.Load()
 	ui.Version = version
-	_, err = tea.NewProgram(ui.New(cfg, ag, root, ref, sess)).Run()
+	_, err = tea.NewProgram(ui.New(cfg, ag, root, ref, sess, comp)).Run()
 	return err
 }
 
