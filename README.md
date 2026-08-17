@@ -278,6 +278,22 @@ in parallel so one that is not running does not hold up the rest.
 
 `/model provider/model` still switches directly, without the list.
 
+**Your choice is remembered.** Switching with `/model` updates `default` in the
+config, so the next session starts on the model you last chose. The config is
+the one place that says which model you use, so that is where the answer lives —
+visible and editable rather than hidden in a state file.
+
+`-m` is the one-off: it overrides for a single run and changes nothing on disk.
+That is the distinction between the two — `/model` is a decision, `-m` is an
+experiment.
+
+A resumed session reopens on the model it was held with, which takes precedence
+over the default. Picking up a conversation on a different model is a surprise,
+and on a smaller one it can undo the reason it was switched. Automatic
+escalation is deliberately excluded from all of this: moving to a roomier model
+for one turn is a measure, not a decision, and should not follow you into
+tomorrow.
+
 ## API keys
 
 Choosing a model whose provider has no key would otherwise fail with a `401` a

@@ -56,7 +56,36 @@ func run() error {
 		return err
 	}
 
+	root, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	if *listSess {
+		return printSessions(root)
+	}
+	if *listRun {
+		return printRunning()
+	}
+
+	// The session is opened before the model is chosen, because a resumed
+	// conversation reopens on the model it was held with. Picking one up on a
+	// different model is a surprise, and on a smaller one it can undo the very
+	// reason it was switched.
+	sess, err := openSession(*resume, *continued, root, "")
+	if err != nil {
+		return err
+	}
+
+	// Order of preference: -m for a one-off, then the session's own model, then
+	// the configured default — which /model keeps up to date, so the last model
+	// chosen is the one a new session starts on.
 	ref := *modelRef
+	if ref == "" && sess.Model != "" {
+		if _, _, err := cfg.Resolve(sess.Model); err == nil {
+			ref = sess.Model
+		}
+	}
 	if ref == "" {
 		ref = cfg.Default
 	}
@@ -72,17 +101,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-
-	root, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
-	if *listSess {
-		return printSessions(root)
-	}
-	if *listRun {
-		return printRunning()
+	if sess.Model == "" {
+		sess.Model = ref
 	}
 
 	// Tool results are capped relative to the model's context, so a single read
@@ -119,10 +139,6 @@ func run() error {
 		ag.EnableSubagents()
 	}
 
-	sess, err := openSession(*resume, *continued, root, ref)
-	if err != nil {
-		return err
-	}
 	ag.Restore(sess.Messages)
 
 	// A prompt on the command line runs one turn and exits, which keeps the

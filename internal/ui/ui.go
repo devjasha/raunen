@@ -173,6 +173,10 @@ type Model struct {
 	// ref is the active "provider/model" reference, kept so the context limit
 	// can be looked up again after /model.
 	ref string
+	// chosen is the model the user picked, which is not always the active one:
+	// escalation moves ref to a roomier model for a turn, and that is a
+	// temporary measure rather than a decision worth remembering.
+	chosen string
 	// branch is the git branch of root, empty outside a repository.
 	branch string
 	// ctxTokens is the conversation size reported by the last request.
@@ -245,6 +249,7 @@ func New(cfg *config.Config, ag *agent.Agent, root, ref string, sess *session.Se
 		ag:     ag,
 		root:   root,
 		ref:    ref,
+		chosen: ref,
 		sess:   sess,
 		comp:   comp,
 		branch: vcs.Branch(root),
@@ -808,7 +813,19 @@ func (m *Model) switchModel(ref string) (tea.Model, tea.Cmd) {
 	m.ag.SetContext(m.cfg.ContextFor(ref))
 	m.ag.SetRef(ref)
 	m.ref = ref
+	m.chosen = ref
 	m.add(okStyle.Render("✓ switched to " + ref))
+
+	// Remembered for next time. Choosing a model is a decision about how you
+	// work, so the config — the one place that says which model you use — is
+	// where it belongs, rather than in a hidden state file. The -m flag stays a
+	// one-off override precisely because it does not come through here.
+	if m.cfg.Default != ref {
+		m.cfg.Default = ref
+		if err := m.cfg.Save(); err != nil {
+			m.add(errStyle.Render("✗ could not remember the model: " + err.Error()))
+		}
+	}
 	return *m, nil
 }
 
@@ -817,9 +834,10 @@ func (m *Model) switchModel(ref string) (tea.Model, tea.Cmd) {
 // not worth interrupting the conversation for.
 func (m *Model) persist() {
 	m.sess.Messages = m.ag.Messages()
-	if m.sess.Model == "" {
-		m.sess.Model = m.ref
-	}
+	// Recorded so resuming picks up where it left off. The chosen model, not
+	// the active one: a session that happened to end on an escalated model
+	// should not reopen on it.
+	m.sess.Model = m.chosen
 	if err := m.sess.Save(); err != nil {
 		m.add(errStyle.Render("✗ could not save session: " + err.Error()))
 	}
