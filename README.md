@@ -274,6 +274,35 @@ without a key — Groq and Cerebras answer `401` even for the model list — app
 in `/model` as `⊕ add a key for groq`, so the chooser is a way in rather than a
 dead end.
 
+## Voice input
+
+Nothing to configure. Dictation tools — Wispr Flow, macOS Dictation, Talon —
+insert the finished transcription into whatever has focus, and raunen takes it
+the same way it takes anything pasted:
+
+```
+╭──────────────────────────────────────────────────────────╮
+│ › First sentence of dictation.                           │
+│   Second sentence on a new line.                          │
+│   Third one.                                             │
+╰──────────────────────────────────────────────────────────╯
+```
+
+Multi-line dictation arrives intact and the input grows to fit. Nothing is sent
+until you press enter, because a paste is a paste — the newlines inside it are
+content, not a keypress.
+
+**The one case that does not work** is a tool that types a literal `Return`
+between sentences rather than inserting text. That is indistinguishable from
+you pressing enter, so the first sentence sends on its own. If your tool behaves
+that way, dictate into a scratch buffer and paste, or use `shift+enter` for the
+line breaks yourself.
+
+**There is no built-in recording.** It would mean a microphone, a Whisper model
+and an audio library — several hundred megabytes and a real runtime, for a job
+a dedicated dictation tool already does better and system-wide. The single
+static binary is worth more than saving you a keystroke.
+
 ## Modes
 
 `tab` cycles three modes, shown at the left of the status bar.
