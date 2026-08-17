@@ -225,14 +225,31 @@ the same tax. Three layers, because failures differ in what they imply:
 
 | Failure | Response |
 |---|---|
-| `429`/`402` rate limit | cool that model down, 30s doubling to 15 minutes |
+| `429` rate limit | cool that model down, 30s doubling to 15 minutes |
+| `402` needs credits | lock that model out for the session |
 | connection refused, `5xx` | after 3 in a row, take the whole endpoint out for 2 minutes |
 | `400`/`404` model rejected | lock that model out for the session |
 
-The distinctions are the point. A quota clears on its own, so waiting works. A
-model name that does not exist never will, so waiting is pure cost. And a server
-that is down takes its other models with it — trying them one by one only spends
-time discovering that.
+The distinctions are the point. A throughput quota clears on its own, so waiting
+works. An empty balance does not — no amount of waiting adds credit to an
+account, so a `402` is a lockout rather than a cooldown. A model name that does
+not exist never will exist. And a server that is down takes its other models with
+it, so trying them one by one only spends time discovering that.
+
+The endpoint's own message is shown rather than a paraphrase, because it is
+usually specific enough to act on:
+
+```
+✗ openrouter/moonshotai/kimi-k3 refused — This request requires more credits,
+  or fewer max_tokens. You requested up to 65536 tokens, but can only afford
+  2666. To increase, visit https://openrouter.ai/settings/credits
+⇅ switched to openrouter/nvidia/nemotron-3-ultra-550b-a55b:free — needs credits
+```
+
+**Size only matters when room is the problem.** After a refusal, a slightly
+smaller model that answers beats a larger one that will not — insisting on a
+roomier window left a whole ladder unused, since a model declaring 1,048,576
+tokens outranked every free rung at 1,000,000.
 
 A request that succeeds clears the cooldown and the endpoint's failure count,
 so one blip does not suppress a good model.
