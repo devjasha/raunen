@@ -206,10 +206,16 @@ function Cost() {
           <p>
             Every provider bills in context, which is why the status bar shows it.
             Two habits do more for a bill than any setting: <code>/clear</code> when
-            a conversation is done, and letting sub-agents do the searching — a{" "}
+            a conversation is done, and letting{" "}
+            <Link to="/docs/subagents">sub-agents</Link> do the searching — a{" "}
             <code>task</code> gets its own empty context and returns only its answer,
             so a long grep does not sit in the main conversation being re-sent every
             turn.
+          </p>
+          <p>
+            Delegating several at once costs no more than delegating them one after
+            another — the same tokens are spent either way — but they run
+            concurrently, so it costs a great deal less waiting.
           </p>
           <p>
             Tool output is also cleaned before it is charged to the context — ANSI

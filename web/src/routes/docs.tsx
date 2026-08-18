@@ -23,6 +23,7 @@ const NAV = [
       { to: "/docs/modes", label: "Modes" },
       { to: "/docs/commands", label: "Commands & keys" },
       { to: "/docs/models", label: "Models & ladders" },
+      { to: "/docs/subagents", label: "Sub-agents" },
     ],
   },
   {

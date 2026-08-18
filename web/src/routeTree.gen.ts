@@ -20,6 +20,7 @@ import { Route as DocsLocalModelsRouteImport } from './routes/docs/local-models'
 import { Route as DocsMcpRouteImport } from './routes/docs/mcp'
 import { Route as DocsModelsRouteImport } from './routes/docs/models'
 import { Route as DocsModesRouteImport } from './routes/docs/modes'
+import { Route as DocsSubagentsRouteImport } from './routes/docs/subagents'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -76,6 +77,11 @@ const DocsModesRoute = DocsModesRouteImport.update({
   path: '/modes',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsSubagentsRoute = DocsSubagentsRouteImport.update({
+  id: '/subagents',
+  path: '/subagents',
+  getParentRoute: () => DocsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -88,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/docs/mcp': typeof DocsMcpRoute
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
+  '/docs/subagents': typeof DocsSubagentsRoute
   '/docs/': typeof DocsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -100,6 +107,7 @@ export interface FileRoutesByTo {
   '/docs/mcp': typeof DocsMcpRoute
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
+  '/docs/subagents': typeof DocsSubagentsRoute
   '/docs': typeof DocsIndexRoute
 }
 export interface FileRoutesById {
@@ -114,6 +122,7 @@ export interface FileRoutesById {
   '/docs/mcp': typeof DocsMcpRoute
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
+  '/docs/subagents': typeof DocsSubagentsRoute
   '/docs/': typeof DocsIndexRoute
 }
 export interface FileRouteTypes {
@@ -129,6 +138,7 @@ export interface FileRouteTypes {
     | '/docs/mcp'
     | '/docs/models'
     | '/docs/modes'
+    | '/docs/subagents'
     | '/docs/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -141,6 +151,7 @@ export interface FileRouteTypes {
     | '/docs/mcp'
     | '/docs/models'
     | '/docs/modes'
+    | '/docs/subagents'
     | '/docs'
   id:
     | '__root__'
@@ -154,6 +165,7 @@ export interface FileRouteTypes {
     | '/docs/mcp'
     | '/docs/models'
     | '/docs/modes'
+    | '/docs/subagents'
     | '/docs/'
   fileRoutesById: FileRoutesById
 }
@@ -242,6 +254,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsModesRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/subagents': {
+      id: '/docs/subagents'
+      path: '/subagents'
+      fullPath: '/docs/subagents'
+      preLoaderRoute: typeof DocsSubagentsRouteImport
+      parentRoute: typeof DocsRoute
+    }
   }
 }
 
@@ -253,6 +272,7 @@ interface DocsRouteChildren {
   DocsMcpRoute: typeof DocsMcpRoute
   DocsModelsRoute: typeof DocsModelsRoute
   DocsModesRoute: typeof DocsModesRoute
+  DocsSubagentsRoute: typeof DocsSubagentsRoute
   DocsIndexRoute: typeof DocsIndexRoute
 }
 
@@ -264,6 +284,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsMcpRoute: DocsMcpRoute,
   DocsModelsRoute: DocsModelsRoute,
   DocsModesRoute: DocsModesRoute,
+  DocsSubagentsRoute: DocsSubagentsRoute,
   DocsIndexRoute: DocsIndexRoute,
 }
 

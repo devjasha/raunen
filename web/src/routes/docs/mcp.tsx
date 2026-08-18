@@ -79,7 +79,7 @@ function Mcp() {
       </p>
 
       <div className="pager">
-        <Link to="/docs/models">← Models &amp; ladders</Link>
+        <Link to="/docs/subagents">← Sub-agents</Link>
         <Link to="/docs/local-models">Local models →</Link>
       </div>
     </>

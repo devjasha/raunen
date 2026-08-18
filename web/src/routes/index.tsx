@@ -115,8 +115,8 @@ function Home() {
               <div className="cell">
                 <h3>Sub-agents</h3>
                 <p>
-                  Self-contained investigation is delegated to a sub-agent with its
-                  own empty context, which returns only its final answer.
+                  Investigation is delegated to a sub-agent with its own empty
+                  context, which returns only its answer. Several run at once.
                 </p>
               </div>
               <div className="cell">

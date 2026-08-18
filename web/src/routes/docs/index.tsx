@@ -46,6 +46,10 @@ function Overview() {
           escalating when it runs out of room.
         </li>
         <li>
+          <Link to="/docs/subagents">Sub-agents</Link> — delegating investigation,
+          several at a time.
+        </li>
+        <li>
           <Link to="/docs/mcp">MCP servers</Link> — adding tools from outside.
         </li>
         <li>

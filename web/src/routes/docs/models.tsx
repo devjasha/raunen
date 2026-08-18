@@ -96,7 +96,7 @@ function Models() {
 
       <div className="pager">
         <Link to="/docs/commands">← Commands &amp; keys</Link>
-        <Link to="/docs/mcp">MCP servers →</Link>
+        <Link to="/docs/subagents">Sub-agents →</Link>
       </div>
     </>
   );
