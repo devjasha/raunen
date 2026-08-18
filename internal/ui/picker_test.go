@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"raunen/internal/config"
@@ -144,5 +145,62 @@ func TestPickerCursorStaysInRange(t *testing.T) {
 	p.apply()
 	if got := p.selected(); got != "" {
 		t.Errorf("selected = %q with no matches, want empty", got)
+	}
+}
+
+// In branch mode a name nobody has yet is offered as something to create,
+// because typing a new name is how most branches start life.
+func TestPickerOffersToCreateABranch(t *testing.T) {
+	p := &picker{kind: pickBranch}
+	p.setItems([]string{"main", "feature"})
+
+	p.filter = "spike"
+	p.apply()
+	if len(p.filtered) != 1 || p.filtered[0] != newBranchPrefix+"spike" {
+		t.Fatalf("filtered = %v, want the create entry", p.filtered)
+	}
+
+	// An existing branch is a match, not an invitation to create a duplicate.
+	p.filter = "main"
+	p.apply()
+	for _, l := range p.filtered {
+		if strings.HasPrefix(l, newBranchPrefix) {
+			t.Fatalf("filtered = %v, want no create entry for an existing branch", p.filtered)
+		}
+	}
+
+	// The create entry goes last, so an existing branch that merely contains
+	// the query is still what enter picks.
+	p.filter = "feat"
+	p.apply()
+	if len(p.filtered) < 2 || p.filtered[0] != "feature" {
+		t.Fatalf("filtered = %v, want feature first", p.filtered)
+	}
+}
+
+// Names git would reject are not offered, so the list never invites a switch
+// that cannot work.
+func TestPickerDoesNotOfferImpossibleNames(t *testing.T) {
+	p := &picker{kind: pickBranch}
+	p.setItems([]string{"main"})
+	for _, bad := range []string{"has space", "-dash", "sub/", "a..b", "what?"} {
+		p.filter = bad
+		p.apply()
+		for _, l := range p.filtered {
+			if strings.HasPrefix(l, newBranchPrefix) {
+				t.Errorf("%q was offered as a branch name", bad)
+			}
+		}
+	}
+}
+
+// The model chooser has no business offering to create anything.
+func TestPickerModelModeNeverOffersCreation(t *testing.T) {
+	p := &picker{}
+	p.setModels([]string{"ollama/qwen3:8b"})
+	p.filter = "nothing-like-it"
+	p.apply()
+	if len(p.filtered) != 0 {
+		t.Fatalf("filtered = %v, want nothing", p.filtered)
 	}
 }

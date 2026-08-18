@@ -13,12 +13,25 @@ import (
 
 	"raunen/internal/config"
 	"raunen/internal/provider"
+	"raunen/internal/vcs"
 )
 
-// picker is the model chooser: a small overlay above the input, listing what
-// the configured endpoints actually serve. The list is fetched rather than
-// configured, so it reflects what is installed right now.
+// pickKind says what a picker is choosing between. The overlay is the same
+// searchable list either way; only the nouns and the few model-specific
+// decorations differ.
+type pickKind int
+
+const (
+	pickModel pickKind = iota
+	pickBranch
+)
+
+// picker is the chooser: a small overlay above the input, listing what the
+// configured endpoints actually serve, or what branches the repository has.
+// The list is fetched rather than configured, so it reflects what is there
+// right now.
 type picker struct {
+	kind     pickKind
 	needsKey map[string]string
 	all      []string
 	filtered []string
@@ -28,6 +41,39 @@ type picker struct {
 	err      error
 	// cfg lets the list float pinned models to the top and mark them.
 	cfg *config.Config
+}
+
+// noun names what is being chosen, for the counts in the search line.
+func (p *picker) noun(n int) string {
+	if p.kind == pickBranch {
+		if n == 1 {
+			return "branch"
+		}
+		return "branches"
+	}
+	if n == 1 {
+		return "model"
+	}
+	return "models"
+}
+
+// branchesMsg carries the repository's branches, or the reason there are none
+// to show.
+type branchesMsg struct {
+	branches []string
+	err      error
+}
+
+// fetchBranches asks git what branches exist. Off the main loop because it
+// shells out, which is fast but not instant on a large repository.
+func fetchBranches(root string) tea.Cmd {
+	return func() tea.Msg {
+		list, err := vcs.Branches(root)
+		if err != nil {
+			return branchesMsg{err: err}
+		}
+		return branchesMsg{branches: list}
+	}
 }
 
 // modelsMsg carries the result of asking every provider what it has.
@@ -49,6 +95,10 @@ const (
 	// switching model. It reads as a sentence in the list and still matches the
 	// provider name when filtering.
 	addKeyPrefix = "⊕ add a key for "
+	// newBranchPrefix marks the entry that creates the branch being searched
+	// for. Typing a name nobody has yet is how a branch is usually made, so the
+	// list offers it rather than reporting that nothing matches.
+	newBranchPrefix = "⊕ create branch "
 	// favMarker marks a pinned model at the top of the chooser.
 	favMarker = "★ "
 )
@@ -154,6 +204,14 @@ func (p *picker) setModels(models []string) {
 	p.apply()
 }
 
+// setItems fills a picker whose entries have no favourites to float: branches
+// arrive already in the order they should be read.
+func (p *picker) setItems(items []string) {
+	p.all = items
+	p.loading = false
+	p.apply()
+}
+
 // apply refreshes the visible list after the query changes.
 //
 // Model names are long and structured — "openrouter/nvidia/nemotron-3.5-
@@ -197,7 +255,38 @@ func (p *picker) apply() {
 		}
 	}
 	p.filtered = append(append(p.filtered, exact...), fuzzy...)
+	p.offerNew(terms)
 	p.clampCursor()
+}
+
+// offerNew appends the create-a-branch entry when the search names a branch
+// that does not exist yet. It goes last so it can never be picked by accident
+// when an existing branch matches, and it is skipped for a query that could
+// not be a branch name anyway.
+func (p *picker) offerNew(terms []string) {
+	if p.kind != pickBranch || p.loading || len(terms) != 1 {
+		return
+	}
+	name := strings.TrimSpace(p.filter)
+	if !validBranchName(name) {
+		return
+	}
+	for _, b := range p.all {
+		if b == name {
+			return
+		}
+	}
+	p.filtered = append(p.filtered, newBranchPrefix+name)
+}
+
+// validBranchName is a deliberately loose check: git refuses what it dislikes,
+// and reports it better than this could. It only rules out the shapes that
+// would make the offer look silly.
+func validBranchName(s string) bool {
+	if s == "" || strings.ContainsAny(s, " ~^:?*[\\") || strings.Contains(s, "..") {
+		return false
+	}
+	return !strings.HasPrefix(s, "-") && !strings.HasPrefix(s, "/") && !strings.HasSuffix(s, "/")
 }
 
 func (p *picker) clampCursor() {
@@ -264,7 +353,7 @@ func (p *picker) render(width int, current string) string {
 	case p.filter != "":
 		b.WriteString(dimStyle.Render(fmt.Sprintf("   %d of %d", len(p.filtered), len(p.all))))
 	case len(p.all) > 0:
-		b.WriteString(dimStyle.Render(fmt.Sprintf("   %d models", len(p.all))))
+		b.WriteString(dimStyle.Render(fmt.Sprintf("   %d %s", len(p.all), p.noun(len(p.all)))))
 	}
 	b.WriteString("\n")
 
@@ -272,7 +361,11 @@ func (p *picker) render(width int, current string) string {
 	case p.err != nil:
 		b.WriteString(errStyle.Render(ansi.Truncate(p.err.Error(), inner, "…")))
 	case p.loading:
-		b.WriteString(dimStyle.Render("asking the configured endpoints…"))
+		if p.kind == pickBranch {
+			b.WriteString(dimStyle.Render("reading the repository…"))
+		} else {
+			b.WriteString(dimStyle.Render("asking the configured endpoints…"))
+		}
 	case len(p.filtered) == 0:
 		b.WriteString(dimStyle.Render("nothing matches"))
 	default:
@@ -287,7 +380,7 @@ func (p *picker) render(width int, current string) string {
 			marker := "  "
 			if line == current {
 				marker = "• "
-			} else if p.cfg != nil && p.cfg.IsFavourite(line) {
+			} else if p.kind == pickModel && p.cfg != nil && p.cfg.IsFavourite(line) {
 				marker = favMarker
 			}
 			// Flag a model whose provider has no key: its catalogue lists but

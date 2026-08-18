@@ -29,6 +29,7 @@ type command struct {
 var commands = []command{
 	{name: "/model", args: "[provider/model]", help: "choose a model from a list, or switch directly"},
 	{name: "/favourite", args: "[provider/model]", help: "pin or unpin a model for quick access", aliases: []string{"/fav"}},
+	{name: "/branch", args: "[name]", help: "switch branch, or choose one from a list", aliases: []string{"/br"}},
 	{name: "/status", help: "model, context, ladder, endpoints"},
 	{name: "/companion", help: "your dragon's level and what fed it", aliases: []string{"/comp"}},
 	{name: "/providers", help: "list configured endpoints"},

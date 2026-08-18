@@ -382,6 +382,19 @@ func (a *Agent) SetClient(c *provider.Client) { a.client = c }
 // Reset clears the transcript, keeping the system prompt.
 func (a *Agent) Reset() { a.messages = a.messages[:1] }
 
+// Note records something that happened outside the conversation but changes
+// what is true inside it — the working directory moving to another branch, say.
+//
+// It goes in as a user message rather than a system one: the transcript already
+// carries exactly one system prompt, and endpoints differ on what a second one
+// means, whereas every one of them reads a user turn.
+func (a *Agent) Note(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	a.messages = append(a.messages, provider.Message{Role: provider.User, Content: text})
+}
+
 // approve asks the frontend to allow a call, returning false if the turn is
 // cancelled while waiting.
 func (a *Agent) approve(ctx context.Context, tc provider.ToolCall, out chan<- Event) bool {

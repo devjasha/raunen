@@ -714,10 +714,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case modelsMsg:
-		if m.pick != nil {
+		if m.pick != nil && m.pick.kind == pickModel {
 			m.pick.err = msg.err
 			m.pick.needsKey = msg.needsKey
 			m.pick.setModels(msg.models)
+		}
+		return m, nil
+
+	case branchesMsg:
+		if m.pick != nil && m.pick.kind == pickBranch {
+			m.pick.err = msg.err
+			m.pick.setItems(msg.branches)
 		}
 		return m, nil
 
@@ -863,6 +870,9 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+f":
 			// Pin or unpin what is highlighted without leaving the list, so a
 			// handful of models can be marked in one pass.
+			if m.pick.kind != pickModel {
+				return *m, nil
+			}
 			if ref := m.pick.selected(); ref != "" {
 				if err := m.cfg.ToggleFavourite(ref); err != nil {
 					m.add(errStyle.Render("✗ could not update favourites: " + err.Error()))
@@ -875,6 +885,17 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return *m, nil
 		case "enter":
+			if m.pick.kind == pickBranch {
+				sel := m.pick.selected()
+				m.pick = nil
+				if sel == "" {
+					return *m, nil
+				}
+				if name, ok := strings.CutPrefix(sel, newBranchPrefix); ok {
+					return m.switchBranch(name, true)
+				}
+				return m.switchBranch(sel, false)
+			}
 			if ref := m.pick.selected(); ref != "" {
 				m.pick = nil
 				// The entry that offers to add a key, for a provider whose
@@ -1138,6 +1159,44 @@ func (m *Model) switchModel(ref string) (tea.Model, tea.Cmd) {
 			m.add(errStyle.Render("✗ could not remember the model: " + err.Error()))
 		}
 	}
+	return *m, nil
+}
+
+// switchBranch checks out another branch of the working directory, creating it
+// first when create is set.
+//
+// The conversation is kept: the files under discussion are the same files, and
+// throwing away the context of a switch would be a strange way to reward one.
+// What the agent must not do is carry on believing the old branch is checked
+// out, so the switch is announced into the transcript, where it becomes part
+// of the history the model reads.
+func (m *Model) switchBranch(name string, create bool) (tea.Model, tea.Cmd) {
+	if m.branch == "" {
+		m.add(errStyle.Render("✗ not a git repository"))
+		return *m, nil
+	}
+	if name == m.branch && !create {
+		m.add(dimStyle.Render("already on " + name))
+		return *m, nil
+	}
+	if err := vcs.Checkout(m.root, name, create); err != nil {
+		// git's own words: "Your local changes would be overwritten…" says
+		// exactly what to do next, and nothing here could say it better.
+		m.add(errStyle.Render("✗ " + err.Error()))
+		return *m, nil
+	}
+
+	from := m.branch
+	m.branch = vcs.Branch(m.root)
+	if create {
+		m.add(okStyle.Render("✓ created "+m.branch) + dimStyle.Render("  from "+from))
+	} else {
+		m.add(okStyle.Render("✓ switched to "+m.branch) + dimStyle.Render("  from "+from))
+	}
+	// Told to the model as well as the user. A branch switch changes the files
+	// underneath it, so anything it read a moment ago may no longer be true.
+	m.ag.Note(fmt.Sprintf("The user switched the working directory from branch %q to branch %q. "+
+		"Files may have changed on disk; re-read anything you are relying on.", from, m.branch))
 	return *m, nil
 }
 
@@ -1649,6 +1708,34 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		}
 		return m.switchModel(fields[1])
 
+	case "/branch", "/br":
+		if m.busy {
+			// The agent is mid-turn with tools running against these files.
+			// Moving the working tree underneath it would have it read one
+			// branch and write to another, and the note appended on the way
+			// races with the turn appending to the same transcript.
+			m.add(errStyle.Render("✗ /branch has to wait for the turn to finish"))
+			return *m, nil
+		}
+		if m.branch == "" {
+			m.add(errStyle.Render("✗ not a git repository"))
+			return *m, nil
+		}
+		if len(fields) < 2 {
+			// No argument: offer what the repository has.
+			m.pick = &picker{kind: pickBranch, loading: true, cfg: m.cfg}
+			return *m, fetchBranches(m.root)
+		}
+		// "-b name" creates, mirroring git, so the habit carries over.
+		if fields[1] == "-b" || fields[1] == "-c" {
+			if len(fields) < 3 {
+				m.add(errStyle.Render("✗ /branch -b needs a name"))
+				return *m, nil
+			}
+			return m.switchBranch(fields[2], true)
+		}
+		return m.switchBranch(fields[1], false)
+
 	case "/favourite", "/fav":
 		ref := m.ref
 		if len(fields) >= 2 {
@@ -1787,7 +1874,13 @@ func (m Model) View() tea.View {
 		rows = append(rows, strings.Split(w.render(m.innerWidth(), f, i, len(m.subs)), "\n")...)
 	}
 	if m.pick != nil {
-		rows = append(rows, strings.Split(m.pick.render(m.innerWidth(), m.ref), "\n")...)
+		// What counts as "current" depends on what is being chosen: the dot
+		// marks the model in use, or the branch checked out.
+		current := m.ref
+		if m.pick.kind == pickBranch {
+			current = m.branch
+		}
+		rows = append(rows, strings.Split(m.pick.render(m.innerWidth(), current), "\n")...)
 	}
 	if m.keyAsk != nil {
 		rows = append(rows, strings.Split(m.keyAsk.render(m.innerWidth()), "\n")...)

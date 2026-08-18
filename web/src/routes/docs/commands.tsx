@@ -10,6 +10,8 @@ const COMMANDS: [string, string][] = [
   ["/model", "choose a model from a list"],
   ["/model <provider/model>", "switch directly"],
   ["/favourite", "pin or unpin the current model (/fav)"],
+  ["/branch", "choose a branch from a list (/br)"],
+  ["/branch <name>", "check it out; -b <name> creates it"],
   ["/status", "model, context, ladder and endpoints on one screen"],
   ["/companion", "your dragon's level and what fed it"],
   ["/providers", "list configured endpoints"],
@@ -80,6 +82,38 @@ function Commands() {
           ))}
         </tbody>
       </table>
+
+      <h2>Switching branches</h2>
+      <p>
+        The status bar already says which branch you are on. <code>/branch</code>{" "}
+        changes it without leaving the conversation, using the same list and the
+        same keys as <code>/model</code>.
+      </p>
+      <Term title="raunen">
+        {"╭──────────────────────────────────────────────╮\n"}
+        {"│ search ›    4 branches                       │\n"}
+        {"│ ❯ • main                                     │\n"}
+        {"│     fix-login                                │\n"}
+        {"│     spike/streaming                          │\n"}
+        {"╰──────────────────────────────────────────────╯"}
+      </Term>
+      <p>
+        Branches are ordered by their last commit rather than alphabetically —
+        the one you want next is nearly always one you touched recently. Local
+        branches come first, then any that exist only on a remote, under the
+        short name checking one out would create. Typing a name nobody has yet
+        offers to create it, always as the last entry so it is never picked by
+        accident.
+      </p>
+      <div className="note">
+        <p>
+          <strong>The conversation survives the switch.</strong> The files under
+          discussion are the same files. The switch is noted into the history the
+          model reads, so it knows not to trust what it read a moment ago — and
+          nothing is stashed, committed or forced on your behalf. A switch git
+          refuses fails with git's own message.
+        </p>
+      </div>
 
       <h2>Pointing at files with @</h2>
       <p>

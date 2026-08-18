@@ -231,6 +231,8 @@ a folder is exactly the sort of thing it is for.
 | `/model` | choose a model from a list |
 | `/model <provider/model>` | switch directly |
 | `/favourite` | pin or unpin the current model (`/fav`) |
+| `/branch` | choose a branch from a list (`/br`) |
+| `/branch <name>` | check it out; `-b <name>` creates it |
 | `/status` | model, context, ladder and endpoints on one screen |
 | `/companion` | your dragon's level and what fed it |
 | `/providers` | list configured endpoints |
@@ -393,6 +395,65 @@ visible and editable:
 
 Pinning is independent of `default`: a favourite is a shortcut to reach a model,
 not a decision to use it next time.
+
+## Switching branches
+
+The status bar already tells you which branch you are on. `/branch` lets you
+change it without leaving the conversation to go and type `git checkout` in
+another window:
+
+```
+╭──────────────────────────────────────────────────────────────╮
+│ search ›    4 branches                                       │
+│ ❯ • main                                                     │
+│     fix-login                                                │
+│     spike/streaming                                          │
+│     release-2                                                │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+Same list, same keys as `/model`: `↑`/`↓` to move, `enter` to switch, `esc` to
+cancel, and typing narrows. **Branches are ordered by their last commit**, not
+alphabetically, because the one you want next is nearly always one you touched
+recently. Local branches come first, then any that exist only on a remote —
+listed under their short name, `fix-login` rather than `origin/fix-login`, since
+that is what checking one out creates and what you would have typed.
+
+**A name nobody has yet is offered rather than refused.** Typing a new name is
+how most branches start life, so the list ends with an entry to create it:
+
+```
+╭──────────────────────────────────────────────────────────────╮
+│ search › fix-parser   1 of 4                                 │
+│ ❯   ⊕ create branch fix-parser                               │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+It always goes last, so it can never be picked by accident when a real branch
+matches what you typed.
+
+`/branch <name>` switches directly, and `/branch -b <name>` creates, mirroring
+git so the habit carries over.
+
+**The conversation survives the switch.** The files under discussion are the
+same files, and throwing away the context would be a strange way to reward
+tidying up your branches. What the agent must not do is carry on believing the
+old branch is checked out, so the switch is noted into the history the model
+reads:
+
+```
+✓ switched to fix-login  from main
+```
+
+**Git's refusal is git's to explain.** A switch with uncommitted changes in the
+way fails with the message git wrote, which already says what to do about it:
+
+```
+✗ Your local changes to the following files would be overwritten by checkout: main.go
+```
+
+Nothing is stashed, committed or forced on your behalf. This is a shortcut to a
+`checkout`, not a workflow of its own.
 
 ## API keys
 
@@ -1175,7 +1236,7 @@ internal/provider          OpenAI-compatible streaming client
 internal/session           saving, resuming, running instances
 internal/tools             bash, read, write, edit, list
 internal/ui                Bubble Tea TUI
-internal/vcs               git branch for the status bar
+internal/vcs               git branch for the status bar, and switching it
 contrib/raunen-picker      tmux session picker
 ```
 
