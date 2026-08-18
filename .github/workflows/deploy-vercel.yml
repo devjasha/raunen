@@ -42,15 +42,11 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       - name: Build
-        # vite is a local devDependency; vercel invokes the build command
-        # directly, so add node_modules/.bin to PATH so it resolves.
-        run: |
-          export PATH="$PWD/node_modules/.bin:$PATH"
-          vercel build --prod --token="$VERCEL_TOKEN"
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        # Build the prerendered site ourselves with the proven npm script
+        # (TanStack Start + vite). We skip `vercel build` and deploy with
+        # --prebuilt so Vercel ships dist/client as-is instead of running
+        # its own build command, which can't resolve the SPA entry.
+        run: npm run build
 
       - name: Deploy
         run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
