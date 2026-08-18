@@ -42,7 +42,11 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       - name: Build
-        run: vercel build --prod --token="$VERCEL_TOKEN"
+        # vite is a local devDependency; vercel invokes the build command
+        # directly, so add node_modules/.bin to PATH so it resolves.
+        run: |
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          vercel build --prod --token="$VERCEL_TOKEN"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
