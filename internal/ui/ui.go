@@ -385,6 +385,20 @@ type entry struct {
 	// single style throughout — a question, a quoted reply — sets this;
 	// mixed-style lines like a tool call style their own spans instead.
 	style *lipgloss.Style
+	// code, when set, makes this entry a bordered window of source rather than
+	// a line of text. It is held as data, not as rendered rows, because rewrap
+	// re-renders every entry at the new width after a resize — a stored block
+	// of rows would keep the border width it was built at and leave a ragged
+	// column down the screen. See codeBlock.
+	code *codeBlock
+}
+
+// blankLine reports whether an entry renders as empty space. A code window is
+// not one: it carries no text of its own — everything it draws lives in its
+// codeBlock — so testing the text fields alone would take it for a spacer, let
+// blank() skip the gap after it and let lastKind look straight through it.
+func (e entry) blankLine() bool {
+	return e.text == "" && e.first == "" && e.code == nil
 }
 
 // entryKind classifies a transcript line by its role in the conversation. It
@@ -420,6 +434,11 @@ func spacedApart(prev, next entryKind) bool {
 func (e entry) rows(width int) []string {
 	if width <= 0 {
 		width = 80
+	}
+	// A code window owns the whole entry: it is drawn from its own data at the
+	// current width, which is what keeps the border square after a resize.
+	if e.code != nil {
+		return e.code.rows(width)
 	}
 	if e.rule {
 		if e.stamp == "" {
@@ -476,6 +495,12 @@ func (m Model) blockText(block int) string {
 	var lines []string
 	for _, e := range m.entries {
 		if e.block != block || e.rule {
+			continue
+		}
+		// A code window is left out of a quote. It is a picture of a change the
+		// model itself just made, so sending the frame and the gutter markers
+		// back would spend tokens telling it what it already knows.
+		if e.code != nil {
 			continue
 		}
 		lines = append(lines, strings.TrimRight(ansi.Strip(e.first+e.text), " "))
@@ -574,7 +599,7 @@ func (m Model) lastKind() entryKind {
 			// A rule opens a turn and provides its own separation.
 			return kindNone
 		}
-		if e.text == "" && e.first == "" {
+		if e.blankLine() {
 			continue
 		}
 		return e.kind
@@ -1229,7 +1254,7 @@ func (m *Model) blank() {
 	if len(m.entries) == 0 {
 		return
 	}
-	if last := m.entries[len(m.entries)-1]; last.text == "" && !last.rule && last.first == "" {
+	if last := m.entries[len(m.entries)-1]; last.blankLine() && !last.rule {
 		return
 	}
 	m.push(entry{})
@@ -1370,6 +1395,12 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			cont:  pad + "    ",
 			text:  workStyle.Render(e.Name) + workDim.Render("  "+summarize(e.Args, max(20, m.innerWidth()-len(e.Name)-10))),
 		})
+		// Built here rather than at ToolEnd because the window is a picture of
+		// the file as it was: the tool runs next, and by the time the result
+		// arrives the old contents are gone.
+		if c := codeWindow(m.root, e.Name, e.Args, pad+"  "); c != nil {
+			m.pushKind(entry{kind: kindWork, code: c})
+		}
 		return *m, next
 
 	case agent.ToolEnd:
