@@ -235,6 +235,7 @@ a folder is exactly the sort of thing it is for.
 | `/branch <name>` | check it out; `-b <name>` creates it |
 | `/status` | model, context, ladder and endpoints on one screen |
 | `/companion` | your dragon's level and what fed it |
+| `/prestige` | start a new climb once your dragon is fully grown |
 | `/providers` | list configured endpoints |
 | `/key <provider>` | add an API key |
 | `/sessions` | list saved sessions |
@@ -595,15 +596,15 @@ in, which is context. `/companion` shows where it is up to.
      | \____(      )___) )___
       \______(_______;;; __;;;
 
-  level     8  Bellow
-  progress  ███░░░░░░░░░░░░░░░░░  2.1M to Roar
-  context   2.4M tokens across 214 turns
+  level     137  Murmur
+  progress  ██████████░░░░░░░░░░  1.3M to level 138
+  context   186M tokens across 214 turns
   work      512 tool calls  ·  31 delegated tasks
   hatched   2 days ago
   fed by    3 models
-            openrouter/nvidia/nemotron-3.5-lightning:free  1.2M  50%
-            ollama/qwen3.5-8k:latest                        900k  37%
-            groq/llama-3.3                                  300k  12%
+            openrouter/nvidia/nemotron-3.5-lightning:free   93M  50%
+            ollama/qwen3.5-8k:latest                        69M  37%
+            groq/llama-3.3                                  24M  13%
 ```
 
 **It is yours, not a model's.** Tokens from every provider go into the same
@@ -612,19 +613,46 @@ hosted 1M one feed the same dragon. Switching model or starting a session
 carries it forward — the state lives in `~/.local/share/raunen/companion.json`,
 alongside your sessions rather than in any config.
 
-Ten levels, named from quiet to loud, since raunen is to murmur: **Hush,
-Whisper, Murmur, Rumour, Echo, Chant, Chorus, Bellow, Roar, Thunder**. The first
-few arrive within a session or two so there is something to see; the last is a
-genuine haul at ten million tokens.
+**Five hundred levels, ten names.** The names run from quiet to loud, since
+raunen is to murmur: **Hush, Whisper, Murmur, Rumour, Echo, Chant, Chorus,
+Bellow, Roar, Thunder** — one to every fifty levels. What moves often is the
+number; what moves rarely is what your dragon is called, and reaching the next
+name is the thing worth noticing.
 
-**It grows visibly.** An egg through level 3, a coiled young dragon to level 6,
-and the full thing from 7 — on the welcome screen as well as in `/companion`, so
-progress is something you notice rather than a number you look up. A level-up
-appears in the transcript as it happens, and the level rides along in the status
-bar as `★8`.
+The cost of a level is `10,000 × (level − 1)²`, so each one asks 20k more than
+the one before it. Level 2 lands inside a session, level 10 at 810k is a day of
+use, level 137 is 184M, and level 500 at **2.49 billion tokens** is about a year
+of heavy daily use. It is meant to be a long climb.
 
-The bar drops it first when the terminal is narrow. A level is the least urgent
-thing on that line.
+An existing companion keeps every token it was ever fed and is simply re-read
+against the longer ladder, so it moves up rather than down — though a dragon
+that had reached Thunder on the old ten-level one will find itself back near the
+quiet end of a much longer climb.
+
+**It grows visibly.** An egg through level 10, a coiled young dragon to level
+50, and the full thing after that — on the welcome screen as well as in
+`/companion`, so progress is something you notice rather than a number you look
+up. The stages are fixed levels rather than a share of the ladder on purpose: a
+third of five hundred levels is months of feeding, and nobody should still be
+looking at an egg by then.
+
+A level-up appears in the transcript as it happens, dimly for a plain level and
+in full when the name changes:
+
+```
+  ★ level 137
+  ★ level 151 — Rumour  /companion
+```
+
+The level rides along in the status bar as `★137`. The bar drops it first when
+the terminal is narrow — a level is the least urgent thing on that line.
+
+**Prestige.** At level 500 the bar reads `fully grown` and `/prestige` starts
+the climb again from level 1. It is a command rather than something that happens
+on its own: arriving at the top is the achievement, and silently resetting it on
+the way past would take that away rather than reward it. Ascending keeps the
+record — lifetime tokens, turns, tools, tasks and the hatch date all carry
+across — and the count of finished climbs shows as `✦2` beside the level.
 
 ## Sessions
 

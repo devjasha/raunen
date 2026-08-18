@@ -20,12 +20,24 @@ var hatchling = []string{
 	"   '---'",
 }
 
-// stageArt returns the art for a level, and how many stages remain above it.
+// The two points where the art changes. They are fixed levels rather than a
+// share of the ladder: a third of five hundred levels is 222M tokens, which
+// would leave a companion fed for months still drawn as an egg. The stages mark
+// the beginning of the climb — hatching within a day or so, grown within a few
+// weeks — and the rest of the five hundred is spent as a full dragon, which is
+// the point of the number being large.
+const (
+	eggUntil      = 10
+	younglingTill = 50
+)
+
+// stageArt returns the art for a level: an egg, a coiled young dragon, then the
+// full thing.
 func stageArt(level int) []string {
 	switch {
-	case level <= 3:
+	case level <= eggUntil:
 		return hatchling
-	case level <= 6:
+	case level <= younglingTill:
 		return smallDragon
 	default:
 		return dragon
@@ -60,7 +72,13 @@ func (m Model) companionRows() []entry {
 	}
 	add(entry{})
 
-	row("level", levelStyle.Render(fmt.Sprintf("%d  %s", c.Level(), c.Title())))
+	lvl := levelStyle.Render(fmt.Sprintf("%d  %s", c.Level(), c.Title()))
+	if c.Prestige > 0 {
+		// The climbs already finished, which the level number alone cannot say
+		// once it has been reset to 1.
+		lvl += dimStyle.Render(fmt.Sprintf("   ✦%d", c.Prestige))
+	}
+	row("level", lvl)
 
 	// A bar for the level, and what it would take to fill it.
 	into, span := c.Progress()
@@ -69,14 +87,25 @@ func (m Model) companionRows() []entry {
 	bar := xpFull.Render(strings.Repeat("█", filled)) +
 		dimStyle.Render(strings.Repeat("░", cells-filled))
 	if next := c.Next(); next > 0 {
-		row("progress", bar+dimStyle.Render(fmt.Sprintf("  %s to %s",
-			humanTokens(int(next)), companionTitle(c.Level()+1))))
+		// The name only when it is about to change: within a band "to Murmur"
+		// reads as a journey to where the dragon already is, so the rest of the
+		// time the number is the honest answer.
+		to := fmt.Sprintf("level %d", c.Level()+1)
+		if title := companion.TitleForLevel(c.Level() + 1); title != c.Title() {
+			to = title
+		}
+		row("progress", bar+dimStyle.Render(fmt.Sprintf("  %s to %s", humanTokens(int(next)), to)))
 	} else {
-		row("progress", bar+dimStyle.Render("  fully grown"))
+		row("progress", bar+okStyle.Render("  fully grown")+
+			dimStyle.Render("  /prestige to begin again"))
 	}
 
 	row("context", dimStyle.Render(fmt.Sprintf("%s tokens across %d turns",
 		humanTokens(int(c.Tokens)), c.Turns)))
+	if c.Prestige > 0 {
+		row("lifetime", dimStyle.Render(fmt.Sprintf("%s tokens across %d climbs",
+			humanTokens(int(c.Lifetime)), c.Prestige+1)))
+	}
 	row("work", dimStyle.Render(fmt.Sprintf("%d tool calls  ·  %d delegated tasks",
 		c.Tools, c.Tasks)))
 	row("hatched", dimStyle.Render(c.Age()))
@@ -103,17 +132,6 @@ func (m Model) companionRows() []entry {
 		})
 	}
 	return out
-}
-
-// companionTitle names a level without needing a Companion to ask.
-func companionTitle(level int) string {
-	c := companion.Companion{}
-	// Titles are a property of the level, so borrow one at that level.
-	for level > companion.MaxLevel {
-		level = companion.MaxLevel
-	}
-	c.Tokens = companion.TokensForLevel(level)
-	return c.Title()
 }
 
 func max64(a, b int64) int64 {

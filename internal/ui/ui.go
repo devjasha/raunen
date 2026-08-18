@@ -1508,12 +1508,26 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		// Context is the one thing every provider charges in, so it is what the
 		// companion grows on — whichever model happened to serve this request.
 		if before, after := m.comp.Feed(m.ref, int64(e.Total)); after > before {
+			// Over five hundred levels the number moves often and the name
+			// rarely, so they are not worth the same interruption. A plain
+			// level is a dim aside; a new title — or the top of the ladder —
+			// is the thing to look up from the conversation for.
+			mark, text := dimStyle.Render("★ "), dimStyle.Render(fmt.Sprintf("level %d", after))
+			switch {
+			case after >= companion.MaxLevel:
+				mark = levelStyle.Render("✦ ")
+				text = levelStyle.Render(fmt.Sprintf("level %d — %s, fully grown", after, m.comp.Title())) +
+					dimStyle.Render("  /prestige to begin again")
+			case companion.TitleForLevel(before) != companion.TitleForLevel(after):
+				mark = levelStyle.Render("★ ")
+				text = levelStyle.Render(fmt.Sprintf("level %d — %s", after, m.comp.Title())) +
+					dimStyle.Render("  /companion")
+			}
 			m.pushKind(entry{
 				kind:  kindNotice,
-				first: "  " + levelStyle.Render("★ "),
+				first: "  " + mark,
 				cont:  "    ",
-				text: levelStyle.Render(fmt.Sprintf("level %d — %s", after, m.comp.Title())) +
-					dimStyle.Render("  /companion"),
+				text:  text,
 			})
 		}
 		// Warn before the window overflows rather than after: once the server
@@ -1886,6 +1900,29 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		}
 		return *m, nil
 
+	case "/prestige":
+		// Deliberately a command rather than something that happens on its own.
+		// Reaching the top is the achievement; starting over is a choice made
+		// after it, not a punishment for arriving.
+		if !m.comp.AtTop() {
+			togo := companion.TokensForLevel(companion.MaxLevel) - m.comp.Tokens
+			m.add(errStyle.Render(fmt.Sprintf("✗ /prestige waits for level %d — %s tokens to go",
+				companion.MaxLevel, humanTokens(int(togo)))))
+			return *m, nil
+		}
+		m.comp.Ascend()
+		// Saved now rather than at the end of the next turn: an ascent the user
+		// asked for should survive closing the terminal straight afterwards.
+		if err := m.comp.Save(); err != nil {
+			m.add(errStyle.Render("✗ could not save the companion: " + err.Error()))
+			return *m, nil
+		}
+		m.add(levelStyle.Render(fmt.Sprintf("✦ ascended — climb %d begins at level 1, %s",
+			m.comp.Prestige+1, m.comp.Title())))
+		m.add(dimStyle.Render(fmt.Sprintf("  %s lifetime tokens kept  ·  /companion",
+			humanTokens(int(m.comp.Lifetime)))))
+		return *m, nil
+
 	case "/status":
 		m.status()
 		return *m, probeProviders(m.cfg)
@@ -2119,6 +2156,9 @@ func (m Model) transcript() []string {
 	// and never has to be scrolled past.
 	if len(m.entries) == 0 {
 		companionLine := fmt.Sprintf("★ %d %s", m.comp.Level(), m.comp.Title())
+		if m.comp.Prestige > 0 {
+			companionLine += fmt.Sprintf("  ✦%d", m.comp.Prestige)
+		}
 		if art := welcomeRows(m.innerWidth(), h, m.comp.Level(), m.ag.Model(),
 			m.ag.Mode().String(), shortRoot(m.root), companionLine); art != nil {
 			rows := make([]string, 0, h)
@@ -2180,7 +2220,13 @@ func (m Model) bar() string {
 	}
 	// Last, so it is the first thing dropped on a narrow terminal: a level is
 	// the least urgent thing on the line.
-	parts = append(parts, levelStyle.Render(fmt.Sprintf("★%d", m.comp.Level())))
+	star := fmt.Sprintf("★%d", m.comp.Level())
+	if m.comp.Prestige > 0 {
+		// Without this a companion that has climbed twice looks like one that
+		// has just started.
+		star += fmt.Sprintf("✦%d", m.comp.Prestige)
+	}
+	parts = append(parts, levelStyle.Render(star))
 
 	// Trimmed from the right, so the mode — the thing that changes what a
 	// keystroke does — is the last to go.
@@ -2222,8 +2268,9 @@ func (m Model) contextNearlyFull() bool {
 	return limit > 0 && m.ctxTokens*100/limit >= 85
 }
 
-// humanTokens renders a token count compactly: 940, 1.2k, 24k, 2.4M. The
-// companion deals in millions, so "2400k" would be a poor way to say it.
+// humanTokens renders a token count compactly: 940, 1.2k, 24k, 2.4M, 2.5B. The
+// companion deals in millions by the middle of its ladder and billions at the
+// top of it, so "2400k" would be a poor way to say either.
 func humanTokens(n int) string {
 	switch {
 	case n < 1000:
@@ -2234,8 +2281,14 @@ func humanTokens(n int) string {
 		return fmt.Sprintf("%dk", n/1000)
 	case n < 10_000_000:
 		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	default:
+	case n < 1_000_000_000:
 		return fmt.Sprintf("%dM", n/1_000_000)
+	// The top of the ladder is billions of tokens, and "2490M" is a worse way
+	// to say 2.5 billion than the extra unit is.
+	case n < 10_000_000_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
+	default:
+		return fmt.Sprintf("%dB", n/1_000_000_000)
 	}
 }
 

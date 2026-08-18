@@ -16,6 +16,10 @@ import (
 
 func testModel(t *testing.T) Model {
 	t.Helper()
+	// Point the companion at a temporary directory: without this every test
+	// that builds a model reads — and one that saves would overwrite — the
+	// dragon of whoever is running the suite.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	ag := agent.New(provider.New("http://localhost:1/v1", "", "m"),
 		tools.Default(t.TempDir(), 4096), "")
 	m := New(&config.Config{}, ag, t.TempDir(), "x/m",

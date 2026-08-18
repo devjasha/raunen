@@ -55,7 +55,7 @@ func welcomeRows(width, height, stageLevel int, model, mode, root, level string)
 		// Too small for the full picture; the coiled one still reads as the
 		// same creature.
 		art, gap = smallDragon, 1
-		if stageLevel <= 3 {
+		if stageLevel <= eggUntil {
 			art = hatchling
 		}
 	}

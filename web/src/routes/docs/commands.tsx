@@ -14,6 +14,7 @@ const COMMANDS: [string, string][] = [
   ["/branch <name>", "check it out; -b <name> creates it"],
   ["/status", "model, context, ladder and endpoints on one screen"],
   ["/companion", "your dragon's level and what fed it"],
+  ["/prestige", "start a new climb once your dragon is fully grown"],
   ["/providers", "list configured endpoints"],
   ["/key <provider>", "add an API key"],
   ["/mcp", "list MCP servers and their tools"],

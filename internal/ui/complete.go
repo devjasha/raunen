@@ -32,6 +32,7 @@ var commands = []command{
 	{name: "/branch", args: "[name]", help: "switch branch, or choose one from a list", aliases: []string{"/br"}},
 	{name: "/status", help: "model, context, ladder, endpoints"},
 	{name: "/companion", help: "your dragon's level and what fed it", aliases: []string{"/comp"}},
+	{name: "/prestige", help: "start a new climb once your dragon is fully grown"},
 	{name: "/providers", help: "list configured endpoints"},
 	{name: "/key", args: "<provider>", help: "add an api key"},
 	{name: "/compact", args: "[what to keep]", help: "summarise the conversation to win back context"},
