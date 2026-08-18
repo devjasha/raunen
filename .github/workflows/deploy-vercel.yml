@@ -49,7 +49,9 @@ jobs:
         run: npm run build
 
       - name: Deploy
-        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+        # dist/client holds the prerendered static site; deploy that
+        # directory directly as a static deployment.
+        run: vercel deploy dist/client --prod --token="$VERCEL_TOKEN"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
