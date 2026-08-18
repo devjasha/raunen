@@ -104,8 +104,11 @@ type suggest struct {
 	// because the message it sits in is finished and wants sending.
 	kind sugKind
 	// token is the word being completed, which is what an accepted item
-	// replaces.
-	token string
+	// replaces. start and end are its bounds as rune offsets into the whole
+	// input, so accepting can splice it out of the middle of a long prompt
+	// rather than assuming it hangs off the end.
+	token      string
+	start, end int
 	// scanning marks a file list that has been asked for and not yet arrived,
 	// so the popup can say so rather than appearing to have found nothing.
 	scanning bool
@@ -125,37 +128,63 @@ const suggestRows = 6
 // mention is what starts a file or folder reference.
 const mention = "@"
 
-// lastToken is the word the cursor is on, which for a prompt being typed is
-// the last one. Completion works on the end of the input rather than wherever
-// the caret happens to be: a mention is written as it is reached, and reading
-// an exact caret offset back out of a wrapped textarea is not reliable enough
-// to edit someone's text with.
-func lastToken(line string) string {
-	if i := strings.LastIndexAny(line, " \t\n"); i >= 0 {
-		return line[i+1:]
+// tokenAt is the word being typed at the caret: the run of non-whitespace that
+// ends where the caret is, given as rune offsets into text so a completion can
+// be spliced back in without counting bytes.
+//
+// It stops at the caret rather than running on to the next space, so editing
+// "@foo" in the middle of "see @foo here" completes what has been typed rather
+// than the whole word. The alternative — take the word the caret is inside —
+// reads better in a text editor, but here it would mean that putting the caret
+// after the "u" of "@ui.go" and pressing tab silently ate ".go"; a completion
+// that only ever grows what is to the left of the caret is the one people can
+// predict.
+func tokenAt(text string, caret int) (token string, start, end int) {
+	r := []rune(text)
+	caret = min(max(caret, 0), len(r))
+	start = caret
+	for start > 0 && !isTokenBreak(r[start-1]) {
+		start--
 	}
-	return line
+	return string(r[start:caret]), start, caret
 }
 
-// suggestFor builds the list for what is currently in the input, or nil when
-// there is nothing to offer. files may be nil, which is the state before the
-// first scan has come back.
-func suggestFor(line string, files *fileIndex) *suggest {
-	token := lastToken(line)
+func isTokenBreak(r rune) bool { return r == ' ' || r == '\t' || r == '\n' }
+
+// suggestFor builds the list for the token at the caret, or nil when there is
+// nothing to offer. caret is a rune offset into text. files may be nil, which
+// is the state before the first scan has come back.
+func suggestFor(text string, caret int, files *fileIndex) *suggest {
+	token, start, end := tokenAt(text, caret)
 	switch {
-	// A command is the whole line or it is not a command: once a space has
-	// been typed the user has moved on to the argument, and a slash further in
-	// is prose.
-	case strings.HasPrefix(line, "/") && token == line:
-		return commandSuggest(line)
+	// A command has to open a line of its own. That is looser than the old
+	// "the slash is the whole input", so a command can be typed on a fresh
+	// line under a long prompt, but no looser: a slash anywhere else is prose
+	// or a path — "and/or", "src/main.go", "/model openai/gpt" — and a list
+	// popping up over the transcript for every one of those would be worse
+	// than never offering one at all. Leading whitespace does not count as the
+	// start of a line either; indented text is code being quoted far more
+	// often than it is a command.
+	case strings.HasPrefix(token, "/") && atLineStart(text, start):
+		return commandSuggest(token, start, end)
 	case strings.HasPrefix(token, mention):
-		return fileSuggest(token, files)
+		return fileSuggest(token, start, end, files)
 	}
 	return nil
 }
 
-func commandSuggest(line string) *suggest {
-	s := &suggest{kind: sugCommand, token: line}
+// atLineStart reports whether a rune offset is the first character of a
+// logical line.
+func atLineStart(text string, off int) bool {
+	if off == 0 {
+		return true
+	}
+	r := []rune(text)
+	return off <= len(r) && r[off-1] == '\n'
+}
+
+func commandSuggest(line string, start, end int) *suggest {
+	s := &suggest{kind: sugCommand, token: line, start: start, end: end}
 	for _, c := range commands {
 		if c.matches(line) {
 			s.items = append(s.items, item{
@@ -179,8 +208,8 @@ func commandSuggest(line string) *suggest {
 // fileSuggest offers paths for an @ mention. A bare @, or one ending in a
 // slash, lists that directory — so the mention doubles as a way to look
 // around; anything else is a query over the whole tree.
-func fileSuggest(token string, files *fileIndex) *suggest {
-	s := &suggest{kind: sugFile, token: token}
+func fileSuggest(token string, start, end int, files *fileIndex) *suggest {
+	s := &suggest{kind: sugFile, token: token, start: start, end: end}
 	if files == nil {
 		s.scanning = true
 		return s

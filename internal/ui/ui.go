@@ -234,6 +234,12 @@ type Model struct {
 	// lastInput is what the input held when the list was last rebuilt, which is
 	// how a dismissal can tell "still the same word" from "typing again".
 	lastInput string
+	// lastCaret is where the caret was when the list was last rebuilt, as a
+	// rune offset. Completion happens at the caret, so moving it is as much a
+	// change of question as typing is: arrowing onto a different @token has to
+	// offer that token's paths, and has to lift a dismissal that was about the
+	// word the user has now left.
+	lastCaret int
 	// files is the snapshot @ mentions complete against, nil until the first
 	// one is typed: a session that never mentions a file never pays for a scan.
 	files *fileIndex
@@ -804,11 +810,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // state rather than something the key handlers have to maintain. The command
 // it returns is a scan of the tree, when a mention needs one.
 func (m *Model) refreshSuggest() tea.Cmd {
-	v := m.input.Value()
-	if v != m.lastInput {
+	v, caret := m.input.Value(), m.caretOffset()
+	if v != m.lastInput || caret != m.lastCaret {
 		// Typing something new is a fresh question, so an earlier dismissal
-		// stops applying.
-		m.lastInput = v
+		// stops applying — and so is moving the caret, since the word being
+		// completed is the one it sits after. Arrowing off a dismissed mention
+		// and onto another one asks about the second one.
+		m.lastInput, m.lastCaret = v, caret
 		m.sugOff = false
 	}
 	if m.sugOff || m.pick != nil || m.keyAsk != nil || m.ask != nil {
@@ -816,7 +824,7 @@ func (m *Model) refreshSuggest() tea.Cmd {
 		return nil
 	}
 	prev := m.sug
-	m.sug = suggestFor(v, m.files)
+	m.sug = suggestFor(v, caret, m.files)
 	// Keep the highlight on the same entry where it still exists, so narrowing
 	// the list does not move the selection out from under the user.
 	if prev != nil && m.sug != nil {
@@ -847,24 +855,60 @@ func (m *Model) scan() tea.Cmd {
 	return scanFiles(m.root)
 }
 
-// acceptSuggest replaces the token being completed with the highlighted entry.
-// Only the last word of the input is ever rewritten, which is where the token
-// came from.
+// caretOffset is where the caret sits in Value(), counted in runes. The
+// textarea reports the caret as a logical row plus a rune column, so the rows
+// above it are measured as runes too — a prompt with an em dash or an ellipsis
+// in it would land the splice a byte or two off otherwise.
+func (m *Model) caretOffset() int {
+	lines := strings.Split(m.input.Value(), "\n")
+	row := min(max(m.input.Line(), 0), len(lines)-1)
+	off := 0
+	for _, l := range lines[:row] {
+		off += len([]rune(l)) + 1 // the newline the split ate
+	}
+	return off + min(max(m.input.Column(), 0), len([]rune(lines[row])))
+}
+
+// setInput replaces the whole text and leaves the caret at a rune offset
+// inside it.
+//
+// The textarea has no "put the caret at offset n" call, and stepping to it
+// with CursorDown would count wrapped rows rather than logical ones. So the
+// text goes in in two halves: the part after the caret first, then the part
+// before it inserted at the very beginning — inserting leaves the caret at the
+// end of what was inserted, which is precisely the offset wanted, however many
+// newlines or wide runes it contains.
+func (m *Model) setInput(text string, caret int) {
+	r := []rune(text)
+	caret = min(max(caret, 0), len(r))
+	m.input.SetValue(string(r[caret:]))
+	m.input.MoveToBegin()
+	m.input.InsertString(string(r[:caret]))
+}
+
+// acceptSuggest replaces the token being completed with the highlighted entry,
+// wherever in the text that token is, and leaves the caret just after what was
+// inserted so typing carries on from there rather than jumping to the end of a
+// prompt the user was editing the middle of.
 func (m *Model) acceptSuggest() (tea.Model, tea.Cmd) {
 	it, ok := m.sug.selected()
 	if !ok {
 		return *m, nil
 	}
-	text := strings.TrimSuffix(m.input.Value(), m.sug.token) + it.insert
+	insert := it.insert
 	if it.space {
-		text += " "
+		insert += " "
 	}
-	m.input.SetValue(text)
-	m.input.CursorEnd()
+	r := []rune(m.input.Value())
+	start := min(max(m.sug.start, 0), len(r))
+	end := min(max(m.sug.end, start), len(r))
+	text := string(r[:start]) + insert + string(r[end:])
+	caret := start + len([]rune(insert))
+	m.setInput(text, caret)
 	// A finished completion closes the list. One that carries on — a directory
 	// to step into — leaves it open, and the rebuild below fills it with what
 	// is inside.
-	m.lastInput, m.sugOff, m.sug = text, it.space, nil
+	m.lastInput, m.lastCaret, m.sugOff, m.sug = text, caret, it.space, nil
 	return *m, m.refreshSuggest()
 }
 
@@ -1000,7 +1044,10 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// otherwise finished, and taking enter to mean "complete this
 			// path" would leave no way to send a message that ends in one.
 			// Tab completes those, as it does everywhere else.
-			if m.sug.kind == sugCommand && !isCommand(m.input.Value()) {
+			// Judged on the token rather than the whole input: a command can
+			// now sit on its own line under a prompt, and there the input holds
+			// the prose above it too.
+			if m.sug.kind == sugCommand && !isCommand(m.sug.token) {
 				return m.acceptSuggest()
 			}
 		}

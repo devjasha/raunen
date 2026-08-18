@@ -26,8 +26,17 @@ func TestSuggestOnlyForCommands(t *testing.T) {
 		// Past the first word the user is typing an argument, not a name.
 		{"/model ", false},
 		{"/model openai/gpt", false},
-		// A slash on a later line is prose, not a command.
-		{"a\n/model", false},
+		// A command may open any line, so one can be typed under a long
+		// prompt. This used to be false, back when a command had to be the
+		// whole input.
+		{"a\n/model", true},
+		// Still only at the start of a line: a slash inside prose or a path is
+		// not a command, wherever in the text it falls.
+		{"a\nand/or", false},
+		{"a\nsrc/main.go", false},
+		{"see src/main.go", false},
+		// Indented text is quoted code far more often than it is a command.
+		{"a\n  /model", false},
 		// A name that cannot become a command has nothing to offer.
 		{"/zzz", false},
 		// An address is not a mention: the @ has to start the word.
@@ -35,7 +44,7 @@ func TestSuggestOnlyForCommands(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := suggestFor(tt.line, nil) != nil
+		got := suggestFor(tt.line, caretEnd(tt.line), nil) != nil
 		if got != tt.open {
 			t.Errorf("suggestFor(%q) open = %v, want %v", tt.line, got, tt.open)
 		}
@@ -74,7 +83,7 @@ func TestSuggestMatches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := suggestFor(tt.line, nil)
+			s := suggestFor(tt.line, caretEnd(tt.line), nil)
 			if s == nil {
 				t.Fatalf("suggestFor(%q) offered nothing", tt.line)
 			}
@@ -104,7 +113,7 @@ func TestSuggestMatches(t *testing.T) {
 func TestMentionCompletesTheLastWord(t *testing.T) {
 	idx := indexOf("main.go", "internal/ui/ui.go")
 
-	s := suggestFor("have a look at @ui.go", idx)
+	s := suggestFor("have a look at @ui.go", caretEnd("have a look at @ui.go"), idx)
 	if s == nil {
 		t.Fatal("a mention offered nothing")
 	}
@@ -129,7 +138,7 @@ func TestMentionCompletesTheLastWord(t *testing.T) {
 func TestMentionKeepsGoingIntoAFolder(t *testing.T) {
 	idx := indexOf("internal/ui/ui.go")
 
-	s := suggestFor("@internal", idx)
+	s := suggestFor("@internal", caretEnd("@internal"), idx)
 	it, ok := s.selected()
 	if !ok {
 		t.Fatal("no selection")
@@ -142,7 +151,7 @@ func TestMentionKeepsGoingIntoAFolder(t *testing.T) {
 	}
 
 	// And the completed folder lists what is inside it.
-	inside := suggestFor("@internal/", idx)
+	inside := suggestFor("@internal/", caretEnd("@internal/"), idx)
 	if inside == nil || inside.items[0].insert != "@internal/ui/" {
 		t.Fatalf("stepping into a folder offered %v", names(inside))
 	}
@@ -151,7 +160,7 @@ func TestMentionKeepsGoingIntoAFolder(t *testing.T) {
 // The tree is scanned in the background, so the first mention arrives before
 // the paths do. It has to say so rather than look like nothing matched.
 func TestMentionSaysWhenStillScanning(t *testing.T) {
-	s := suggestFor("@ui", nil)
+	s := suggestFor("@ui", caretEnd("@ui"), nil)
 	if s == nil {
 		t.Fatal("a mention with no index offered nothing at all")
 	}
@@ -183,7 +192,7 @@ func TestAcceptSuggestSplicesTheToken(t *testing.T) {
 			ta.SetValue(tt.typed)
 
 			m := Model{input: ta, files: indexOf("main.go", "internal/ui/ui.go")}
-			m.sug = suggestFor(tt.typed, m.files)
+			m.sug = suggestFor(tt.typed, caretEnd(tt.typed), m.files)
 			if m.sug == nil {
 				t.Fatalf("%q offered nothing to accept", tt.typed)
 			}
@@ -207,7 +216,7 @@ func names(s *suggest) []string {
 // The cursor wraps rather than sticking at either end, so a list of three is
 // reachable in either direction.
 func TestSuggestMoveWraps(t *testing.T) {
-	s := suggestFor("/s", nil)
+	s := suggestFor("/s", caretEnd("/s"), nil)
 	s.move(-1)
 	if s.cursor != len(s.items)-1 {
 		t.Errorf("cursor = %d after moving up from the top, want the last entry", s.cursor)
@@ -259,5 +268,136 @@ func TestEveryAdvertisedCommandIsHandled(t *testing.T) {
 				t.Errorf("%s is offered while typing but not handled by command()", name)
 			}
 		}
+	}
+}
+
+// caretEnd is the caret sitting at the end of the text, in runes, which is
+// where it is for anything typed straight through.
+func caretEnd(s string) int { return len([]rune(s)) }
+
+// The point of completing at the caret: a prompt is often written, then gone
+// back into. A mention typed into the middle of one has to be offered, and
+// what surrounds it has to survive being completed.
+func TestSuggestAtCaretInTheMiddleOfAProse(t *testing.T) {
+	idx := indexOf("main.go", "internal/ui/ui.go")
+	const text = "please look at @ui and tell me what it does"
+	caret := len([]rune("please look at @ui"))
+
+	s := suggestFor(text, caret, idx)
+	if s == nil {
+		t.Fatal("a mention in the middle of a prompt offered nothing")
+	}
+	if s.kind != sugFile {
+		t.Errorf("kind = %v, want a file completion", s.kind)
+	}
+	if s.token != "@ui" {
+		t.Errorf("token = %q, want just the mention at the caret", s.token)
+	}
+}
+
+// The token stops at the caret. Completing "@ui" with the caret after the "i"
+// must not swallow the " and tell me" that follows, nor the rest of a word.
+func TestTokenAtStopsAtTheCaret(t *testing.T) {
+	const text = "see @ui.go here"
+	// Caret after "@ui", i.e. inside the word.
+	caret := len([]rune("see @ui"))
+
+	tok, start, end := tokenAt(text, caret)
+	if tok != "@ui" {
+		t.Errorf("token = %q, want the text up to the caret only", tok)
+	}
+	if start != 4 || end != caret {
+		t.Errorf("bounds = %d..%d, want 4..%d", start, end, caret)
+	}
+}
+
+// A command on its own line under a prompt is the case the old rule could not
+// express, and the one people keep reaching for.
+func TestCommandOnALaterLine(t *testing.T) {
+	const text = "here is a long thought\nspanning two lines\n/mod"
+
+	s := suggestFor(text, caretEnd(text), nil)
+	if s == nil {
+		t.Fatal("a command on its own line offered nothing")
+	}
+	if s.kind != sugCommand {
+		t.Errorf("kind = %v, want a command completion", s.kind)
+	}
+	if s.token != "/mod" {
+		t.Errorf("token = %q, want the command alone rather than the whole prompt", s.token)
+	}
+}
+
+// Splicing has to put back exactly what was around the token, and leave the
+// caret where typing carries on.
+func TestAcceptSuggestSplicesMidText(t *testing.T) {
+	idx := indexOf("main.go", "internal/ui/ui.go")
+	const text = "compare @ui.go with the rest"
+	caret := len([]rune("compare @ui.go"))
+
+	ta := textarea.New()
+	ta.SetWidth(60)
+	ta.SetValue(text)
+
+	m := Model{input: ta, files: idx}
+	m.sug = suggestFor(text, caret, idx)
+	if m.sug == nil {
+		t.Fatal("nothing to accept")
+	}
+
+	next, _ := m.acceptSuggest()
+	got := next.(Model)
+	const want = "compare @internal/ui/ui.go  with the rest"
+	if got.input.Value() != want {
+		t.Fatalf("input = %q, want %q", got.input.Value(), want)
+	}
+	// The caret belongs just after what was inserted, not at the end of the
+	// prompt: the user was editing the middle of it.
+	wantCaret := len([]rune("compare @internal/ui/ui.go "))
+	if c := got.caretOffset(); c != wantCaret {
+		t.Errorf("caret = %d, want %d", c, wantCaret)
+	}
+}
+
+// Columns are rune indices, so a prompt with wide or multi-byte characters in
+// it has to splice in the same place as a plain one. This is the case that
+// silently corrupts text if any of the arithmetic is done in bytes.
+func TestAcceptSuggestWithNonASCIIBefore(t *testing.T) {
+	idx := indexOf("main.go", "internal/ui/ui.go")
+	const prefix = "an em dash — and an ellipsis … then @ui.go"
+	const text = prefix + " and more"
+	caret := len([]rune(prefix))
+
+	ta := textarea.New()
+	ta.SetWidth(80)
+	ta.SetValue(text)
+
+	m := Model{input: ta, files: idx}
+	m.sug = suggestFor(text, caret, idx)
+	if m.sug == nil {
+		t.Fatal("nothing to accept")
+	}
+
+	next, _ := m.acceptSuggest()
+	got := next.(Model).input.Value()
+	const want = "an em dash — and an ellipsis … then @internal/ui/ui.go  and more"
+	if got != want {
+		t.Fatalf("input = %q, want %q", got, want)
+	}
+}
+
+// Moving the caret onto a different mention asks a different question, so the
+// list has to follow it even though the text has not changed.
+func TestCaretMoveRebuildsTheList(t *testing.T) {
+	idx := indexOf("main.go", "internal/ui/ui.go")
+	const text = "@main and @internal"
+
+	first := suggestFor(text, len([]rune("@main")), idx)
+	if first == nil || first.token != "@main" {
+		t.Fatalf("caret on the first mention offered %v", first)
+	}
+	second := suggestFor(text, caretEnd(text), idx)
+	if second == nil || second.token != "@internal" {
+		t.Fatalf("caret on the second mention offered %v", second)
 	}
 }
