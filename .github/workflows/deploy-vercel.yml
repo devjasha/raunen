@@ -1,7 +1,8 @@
 name: deploy-vercel
 
 # Builds the prerendered static site in web/ and ships it to Vercel. The
-# output directory is set in web/vercel.json; the CLI reads it here.
+# Vercel project's root directory is "web"; the CLI appends that to the cwd,
+# so the Vercel CLI steps run from the repo root (repo_root + web = web).
 on:
   push:
     branches: [main]
@@ -14,9 +15,6 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v4
 
@@ -26,8 +24,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - run: npm ci
-      - run: npm run check
+      - run: cd web && npm ci
+      - run: cd web && npm run check
 
       - name: Install Vercel CLI
         run: npm i -g vercel@latest
@@ -43,18 +41,17 @@ jobs:
 
       - name: Build
         # Build the prerendered site with the proven npm script (TanStack
-        # Start + vite) into dist/client.
-        run: npm run build
+        # Start + vite) into web/dist/client.
+        run: cd web && npm run build
 
       - name: Package build output
         # Assemble a Build Output API tree (.vercel/output/static) from the
-        # prerendered dist/client. Deploying with --prebuilt and no path arg
-        # reads this tree from cwd, which avoids the CLI's quirk of appending
-        # the project root directory to a deploy path.
+        # prerendered web/dist/client, at the repo root where Vercel reads
+        # it. Deploying with --prebuilt and no path arg ships that tree.
         run: |
           rm -rf .vercel/output
           mkdir -p .vercel/output/static
-          cp -r dist/client/. .vercel/output/static/
+          cp -r web/dist/client/. .vercel/output/static/
           printf '{"version":3}' > .vercel/output/config.json
 
       - name: Deploy
