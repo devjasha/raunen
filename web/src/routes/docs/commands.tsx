@@ -17,6 +17,7 @@ const COMMANDS: [string, string][] = [
   ["/mcp", "list MCP servers and their tools"],
   ["/sessions", "list saved sessions"],
   ["/resume <id>", "pick up a saved session"],
+  ["/compact [what to keep]", "summarise the conversation to win back context"],
   ["/clear", "start a new session, keeping the old one"],
   ["/help", "show all of this"],
   ["/quit", "exit"],

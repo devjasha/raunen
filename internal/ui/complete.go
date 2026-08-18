@@ -33,6 +33,7 @@ var commands = []command{
 	{name: "/companion", help: "your dragon's level and what fed it", aliases: []string{"/comp"}},
 	{name: "/providers", help: "list configured endpoints"},
 	{name: "/key", args: "<provider>", help: "add an api key"},
+	{name: "/compact", args: "[what to keep]", help: "summarise the conversation to win back context"},
 	{name: "/clear", help: "start a new session", aliases: []string{"/new"}},
 	{name: "/sessions", help: "list saved sessions"},
 	{name: "/resume", args: "<id>", help: "pick up a saved session"},

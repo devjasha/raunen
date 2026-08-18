@@ -237,6 +237,7 @@ a folder is exactly the sort of thing it is for.
 | `/key <provider>` | add an API key |
 | `/sessions` | list saved sessions |
 | `/resume <id>` | pick up a saved session |
+| `/compact [what to keep]` | summarise the conversation to win back context |
 | `/clear` | start a new session, keeping the old one |
 | `task` (tool) | the model delegates to a sub-agent |
 | `/help` | show this |
@@ -1068,24 +1069,52 @@ Size it against your RAM, not just the model: 16384 on a 16 GB machine running a
 you are actually getting with `ollama ps` — the `CONTEXT` column is the truth.
 `RAUNEN_DEBUG=1` prints per-request token accounting on stderr.
 
-**Growing beats shrinking.** When a conversation outgrows the window, raunen
-climbs the fallback ladder first and only trims if there is nowhere left to
-climb. Dropping earlier tool results makes the model forget what it has already
-found and investigate the same thing again, which is a worse outcome than a
-large request — so trimming is the last resort, and it says so when it happens:
+**Growing beats summarising beats shrinking.** When a conversation outgrows the
+window, raunen tries three things in that order.
+
+First it climbs the fallback ladder, because a roomier model costs nothing but
+the switch. Then it **compacts**: one model call writes down what the older
+messages established — paths, symbols, decisions, what is still open — and the
+summary goes in where they were. Only if that is impossible does it **trim**,
+dropping the oldest messages whole.
+
+The order is the point. Trimming makes the model forget what it already found
+and investigate the same thing again, so it is the last resort and it says so:
 
 ```
 ⋯ dropped 4 earlier messages — no roomier model to switch to, so the agent
   may repeat work it has already done
 ```
 
-**Two mechanisms keep requests inside the window.** Tool output is capped
-relative to the context, about a quarter of it per result — a fixed 30 KB cap is
-~8000 tokens, larger than the whole context of a model served at 4096, so one
-`read` would evict everything around it. And history is trimmed before each
-request: the system prompt and the question being answered are never dropped,
-everything else goes oldest first, in whole tool-call groups so the request
-stays valid.
+Compaction happens by itself when the window fills, and reports what it won:
+
+```
+⋯ context was full, so the conversation was compacted — 120 messages into a
+  summary, 87% smaller
+  240k → 31k tokens, keeping the last 6 messages in full
+```
+
+**`/compact` does it on demand**, before the window forces the issue — useful
+when you are about to start something large and would rather pay for the summary
+now. `/compact <what to keep>` passes an instruction to the summariser:
+`/compact the migration plan and why we rejected the first one`.
+
+The recent tail is never summarised. Whatever you are working on right now is
+worth more in full than in précis, and the last three tenths of the budget stays
+verbatim. The summary rejoins the conversation as a labelled record rather than
+as something you said, the material is flattened to plain text so no endpoint
+has to reason about tool calls it was never given schemas for, and a compaction
+that fails leaves the conversation exactly as it was — so trying one costs a
+model call and nothing else. Sub-agents are never compacted: a sub-agent's whole
+context is discarded a few steps later anyway.
+
+**Tool output is capped** relative to the context, about a quarter of it per
+result — a fixed 30 KB cap is ~8000 tokens, larger than the whole context of a
+model served at 4096, so one `read` would evict everything around it.
+
+**Trimming keeps the request valid.** The system prompt and the question being
+answered are never dropped, everything else goes oldest first, in whole
+tool-call groups so no result is left referring to a call that has gone.
 
 **Reasoning models** (qwen3, deepseek-r1, gpt-oss) stream thinking in a separate
 `reasoning` field while `content` stays empty, sometimes for a minute. It is
@@ -1139,7 +1168,7 @@ resize — wrapping is redone at the new width rather than baked in.
 
 ```
 main.go                    CLI entry, one-shot mode
-internal/agent             the tool-use loop, modes, history trimming
+internal/agent             the tool-use loop, modes, compaction and trimming
 internal/companion         the mascot's progress across sessions
 internal/config            providers and models
 internal/provider          OpenAI-compatible streaming client
@@ -1159,9 +1188,10 @@ go test ./...
 The parts worth testing are the ones that run on every line of model output and
 have edge cases that are easy to get wrong: the markup stripper (a tag split
 across streaming deltas), the markdown renderer (a code fence whose contents
-must survive untouched), history trimming (tool-call groups that must stay
-intact), the read-only command allowlist (from both directions), and stream
-termination (a truncated response must not look like an empty one).
+must survive untouched), history trimming and compaction (tool-call groups that
+must stay intact either way, and a failed summary that must leave the
+conversation alone), the read-only command allowlist (from both directions), and
+stream termination (a truncated response must not look like an empty one).
 
 ## Licence
 
