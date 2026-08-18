@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -17,6 +18,15 @@ import (
 type subView struct {
 	desc  string
 	lines []string
+	// open is whether the full panel is shown. A sub-agent starts collapsed to
+	// a single hint under the input: it is working-out, and the caller asked
+	// for an answer rather than for a running commentary. Watching it is a
+	// deliberate act, so the panel opens on a keystroke and stays open until
+	// dismissed or until the sub-agent finishes.
+	open bool
+	// steps counts tool calls, so the hint can say how far along it is without
+	// the panel being open.
+	steps int
 }
 
 // subViewRows is the most the panel will take from the transcript. A sub-agent
@@ -37,9 +47,47 @@ func (s *subView) add(line string) {
 }
 
 // height is the rows the panel occupies, so the transcript above can give up
-// exactly that much and the input stays where it is.
+// exactly that much and the input stays where it is. Collapsed it takes
+// nothing: the hint lives on the status row, which is always there.
 func (s *subView) height() int {
+	if !s.open {
+		return 0
+	}
 	return min(len(s.lines), subViewRows) + 3
+}
+
+// hint is the one-line notice shown under the input while a sub-agent runs and
+// the panel is closed. It says that something is happening, roughly how far
+// along it is, and how to look — which is all that is wanted from a glance.
+func (s *subView) hint(spinner string, width int) string {
+	head := "◆ " + spinner
+	lead := " sub-agent  "
+	step := ""
+	if s.steps > 0 {
+		step = fmt.Sprintf(" · %d steps", s.steps)
+	}
+	tail := step + "  ctrl+o to watch"
+
+	// Shed detail as the terminal narrows, in order of what can be worked out
+	// from elsewhere: the step count is on the panel, the key is in /help, and
+	// the word "sub-agent" is implied by the marker. What must survive is the
+	// marker and the spinner, which are what say something is running at all.
+	fixed := func() int {
+		return ansi.StringWidth(head) + ansi.StringWidth(lead) + ansi.StringWidth(tail)
+	}
+	if fixed() >= width {
+		tail = "  ctrl+o"
+	}
+	if fixed() >= width {
+		tail = ""
+	}
+	if fixed() >= width {
+		lead = " "
+	}
+	label := ansi.Truncate(s.desc, max(0, width-fixed()), "…")
+
+	return subHead.Render(head) + dimStyle.Render(lead) +
+		subBorder.Render(label) + dimStyle.Render(tail)
 }
 
 // render draws the panel at the given width.
@@ -47,8 +95,9 @@ func (s *subView) render(width int, spinner string) string {
 	inner := max(20, width-4)
 
 	var b strings.Builder
+	tail := dimStyle.Render("  ctrl+o to close")
 	b.WriteString(subHead.Render("◆ "+spinner+" working on") + dimStyle.Render("  "+
-		ansi.Truncate(s.desc, max(10, inner-16), "…")))
+		ansi.Truncate(s.desc, max(10, inner-34), "…")) + tail)
 
 	shown := s.lines
 	if len(shown) > subViewRows {

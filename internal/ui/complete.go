@@ -50,6 +50,7 @@ var keyHelp = []string{
 	"tab                      cycle auto / accept edits / plan",
 	"↑/↓ then tab             complete a / command or an @ path",
 	"@                        mark a file or folder for the model",
+	"ctrl+o                   watch the running sub-agent",
 }
 
 // label is the command as it is offered: name and arguments together.

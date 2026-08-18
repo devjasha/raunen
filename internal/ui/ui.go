@@ -947,6 +947,18 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return *m, tea.Quit
 		}
 
+	case "ctrl+o":
+		// Open or close the sub-agent panel. Doing nothing when none is running
+		// is deliberate: the key means "show me the sub-agent", and inventing
+		// something for it to do when there isn't one would only surprise.
+		if m.sub != nil {
+			m.sub.open = !m.sub.open
+			// The panel takes its rows from the transcript, so what is visible
+			// changes under the reader; keep the newest end in view.
+			m.clampScroll()
+		}
+		return *m, nil
+
 	// The terminal's own scrollback cannot see the transcript on the alternate
 	// screen, so scrolling is handled here.
 	case "pgup":
@@ -1219,6 +1231,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			return *m, next
 		}
 		if e.Depth > 0 && m.sub != nil {
+			m.sub.steps++
 			m.sub.add(toolStyle.Render("⏺ "+e.Name) +
 				dimStyle.Render("  "+summarize(e.Args, max(10, m.innerWidth()-len(e.Name)-14))))
 			return *m, next
@@ -1636,7 +1649,7 @@ func (m Model) View() tea.View {
 
 	rows := make([]string, 0, m.height)
 	rows = append(rows, m.transcript()...)
-	if m.sub != nil {
+	if m.sub != nil && m.sub.open {
 		f := spinnerFrames[m.frame%len(spinnerFrames)]
 		rows = append(rows, strings.Split(m.sub.render(m.innerWidth(), f), "\n")...)
 	}
@@ -1655,6 +1668,12 @@ func (m Model) View() tea.View {
 			dimStyle.Render(" "+summarize(m.ask.Args, max(10, m.innerWidth()-40))) +
 			askStyle.Render("   y") + dimStyle.Render(" approve  ") +
 			askStyle.Render("n") + dimStyle.Render(" decline")
+	} else if m.sub != nil && !m.sub.open {
+		// A sub-agent is running with its panel closed. This says so on the row
+		// that is already there, rather than taking rows from the transcript to
+		// show working-out nobody asked to see.
+		f := spinnerFrames[m.frame%len(spinnerFrames)]
+		status = m.sub.hint(f, m.innerWidth())
 	} else if m.busy {
 		f := spinnerFrames[m.frame%len(spinnerFrames)]
 		// The model is mid-turn. Its thinking is not shown, so this only
