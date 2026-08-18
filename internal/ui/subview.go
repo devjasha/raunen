@@ -16,14 +16,11 @@ import (
 // It appears when a sub-agent starts, follows along live, and collapses when
 // the sub-agent is done, leaving a single line in the transcript.
 type subView struct {
+	// id is the agent's task ID, which is how events find their way here when
+	// several sub-agents are running at once.
+	id    string
 	desc  string
 	lines []string
-	// open is whether the full panel is shown. A sub-agent starts collapsed to
-	// a single hint under the input: it is working-out, and the caller asked
-	// for an answer rather than for a running commentary. Watching it is a
-	// deliberate act, so the panel opens on a keystroke and stays open until
-	// dismissed or until the sub-agent finishes.
-	open bool
 	// steps counts tool calls, so the hint can say how far along it is without
 	// the panel being open.
 	steps int
@@ -47,13 +44,39 @@ func (s *subView) add(line string) {
 }
 
 // height is the rows the panel occupies, so the transcript above can give up
-// exactly that much and the input stays where it is. Collapsed it takes
-// nothing: the hint lives on the status row, which is always there.
+// exactly that much and the input stays where it is. Only ever called for the
+// panel being watched; a sub-agent nobody is looking at costs nothing, because
+// its hint lives on the status row, which is always there.
 func (s *subView) height() int {
-	if !s.open {
-		return 0
-	}
 	return min(len(s.lines), subViewRows) + 3
+}
+
+// subsHint is the notice shown while sub-agents run with the panel closed. One
+// gets named; several are counted, because three descriptions do not fit on a
+// row and the count is what is actually wanted at a glance — that work is in
+// flight, how much, and which key looks at it.
+func subsHint(subs []*subView, spinner string, width int) string {
+	if len(subs) == 0 {
+		return ""
+	}
+	if len(subs) == 1 {
+		return subs[0].hint(spinner, width)
+	}
+
+	steps := 0
+	for _, s := range subs {
+		steps += s.steps
+	}
+	head := "◆ " + spinner
+	body := fmt.Sprintf(" %d sub-agents", len(subs))
+	tail := fmt.Sprintf(" · %d steps  ctrl+o to watch", steps)
+	if ansi.StringWidth(head+body+tail) > width {
+		tail = "  ctrl+o"
+	}
+	if ansi.StringWidth(head+body+tail) > width {
+		tail = ""
+	}
+	return subHead.Render(head) + subBorder.Render(body) + dimStyle.Render(tail)
 }
 
 // hint is the one-line notice shown under the input while a sub-agent runs and
@@ -90,12 +113,19 @@ func (s *subView) hint(spinner string, width int) string {
 		subBorder.Render(label) + dimStyle.Render(tail)
 }
 
-// render draws the panel at the given width.
-func (s *subView) render(width int, spinner string) string {
+// render draws the panel at the given width. n and i are how many sub-agents
+// are running and which of them this is, so the header can say where the key
+// goes next — with siblings ctrl+o moves along rather than closing, and a label
+// that claimed otherwise would be a lie.
+func (s *subView) render(width int, spinner string, i, n int) string {
 	inner := max(20, width-4)
 
 	var b strings.Builder
-	tail := dimStyle.Render("  ctrl+o to close")
+	label := "  ctrl+o to close"
+	if n > 1 {
+		label = fmt.Sprintf("  %d/%d  ctrl+o for next", i+1, n)
+	}
+	tail := dimStyle.Render(label)
 	b.WriteString(subHead.Render("◆ "+spinner+" working on") + dimStyle.Render("  "+
 		ansi.Truncate(s.desc, max(10, inner-34), "…")) + tail)
 

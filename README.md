@@ -197,6 +197,7 @@ raunen -version                     # print the version
 | `@` | mark a file or folder in the prompt |
 | `↑` / `↓` | move through the completions while typing `/` or `@` |
 | `esc` | cancel the running turn, or drop a pending reply |
+| `ctrl+o` | watch a running sub-agent, or step to the next |
 | `ctrl+c` | cancel if working, otherwise quit |
 | `pgup` / `pgdn` | scroll the transcript |
 | `shift+↑` / `shift+↓` | scroll by a line |
@@ -928,8 +929,22 @@ its final answer:
   with line numbers.
 ```
 
-Sub-agents work in their own panel above the input, so their steps never flood
-the transcript:
+**Several run at once.** When the model delegates more than one task in a turn
+they run concurrently, because a sub-agent spends its time waiting on a model
+rather than on the machine: three of them against a hosted endpoint finish in
+roughly the time of the slowest instead of the sum. Ordinary tools stay
+sequential — two edits racing on one file is a worse failure than any saving is
+worth — and approval prompts queue, since you have one keyboard.
+
+While they run the status row says so, and `ctrl+o` opens a panel to watch one:
+
+```
+◆ ⠹ 3 sub-agents · 15 steps  ctrl+o to watch
+```
+
+Pressing it again steps to the next, and the press after the last puts the panel
+away. Sub-agents work in their own panel above the input, so their steps never
+flood the transcript:
 
 ```
   ╭──────────────────────────────────────────────────────────╮

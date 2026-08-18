@@ -5,16 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"raunen/internal/provider"
 	"raunen/internal/tools"
 )
 
-// Sub-agents exist for context, not for speed. A local model runs one request
-// at a time — two concurrent requests to the same Ollama measured slower than
-// two sequential ones — so nothing here is parallel.
+// Sub-agents exist for context first and speed second.
 //
-// What they buy is room. A sub-agent gets its own empty window, spends it
+// Siblings delegated in the same turn run concurrently: a sub-agent spends
+// almost all of its time waiting on a model, so three against a hosted endpoint
+// finish in roughly the time of the slowest rather than the sum. Against a
+// single local model there is nothing to win — one GPU serves one request at a
+// time, and two concurrent requests to the same Ollama measured slower than two
+// sequential ones — but nothing to lose either: they queue at the server
+// instead of here.
+//
+// What they buy first is room. A sub-agent gets its own empty window, spends it
 // reading whatever it needs, and hands back a short answer. The main
 // conversation pays for the answer instead of for everything that produced it,
 // which is the difference between finishing a question and running out of
@@ -30,6 +37,10 @@ above" or promise follow-up. Be brief and concrete. You cannot delegate.`
 // wanders is worse than one that gives up: the caller is waiting, and every
 // step it takes is spent from the same wall-clock budget.
 const subSteps = 16
+
+// taskSeq names sub-agents. Siblings are started from separate goroutines, so
+// it is bumped atomically.
+var taskSeq uint64
 
 // EnableSubagents adds the task tool, letting the model delegate. The tool is
 // built here rather than in the tools package because it needs to construct an
@@ -80,7 +91,12 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 		args.Description = "sub-task"
 	}
 
-	a.out <- TaskStart{Description: args.Description}
+	// Names this child for the life of the task, so a frontend can tell several
+	// running at once apart. The counter is atomic because sibling tasks are
+	// started from separate goroutines.
+	id := fmt.Sprintf("t%d", atomic.AddUint64(&taskSeq, 1))
+
+	a.out <- TaskStart{ID: id, Description: args.Description}
 
 	child := &Agent{
 		client: a.client,
@@ -112,6 +128,12 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 		switch e := ev.(type) {
 		case ToolStart:
 			steps++
+			// Stamped on the way through, so the frontend can route it to the
+			// right panel without the child knowing it has siblings.
+			e.Task = id
+			a.out <- e
+		case ToolEnd:
+			e.Task = id
 			a.out <- e
 		case TurnEnd:
 			summary = e.Text
@@ -127,13 +149,13 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 
 	summary = strings.TrimSpace(summary)
 	if failed != nil && summary == "" {
-		a.out <- TaskEnd{Description: args.Description, Steps: steps, Err: failed}
+		a.out <- TaskEnd{ID: id, Description: args.Description, Steps: steps, Err: failed}
 		return "the sub-agent failed: " + failed.Error(), nil
 	}
 	if summary == "" {
 		summary = "(the sub-agent returned nothing)"
 	}
 
-	a.out <- TaskEnd{Description: args.Description, Summary: summary, Steps: steps}
+	a.out <- TaskEnd{ID: id, Description: args.Description, Summary: summary, Steps: steps}
 	return summary, nil
 }

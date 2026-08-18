@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"raunen/internal/provider"
@@ -28,10 +29,15 @@ type ReasoningDelta struct{ Text string }
 // ToolStart fires when the model has requested a tool and it is about to run.
 // Depth is zero for the main conversation and one inside a sub-agent, so a
 // frontend can nest the work without knowing how it was produced.
+//
+// Task identifies which sub-agent produced it, and is empty for the main
+// conversation. Several sub-agents can be in flight at once, so depth alone no
+// longer says where an event came from.
 type ToolStart struct {
 	Name  string
 	Args  string
 	Depth int
+	Task  string
 }
 
 // ToolEnd carries the tool's result, or its error.
@@ -40,13 +46,19 @@ type ToolEnd struct {
 	Result string
 	Err    error
 	Depth  int
+	Task   string
 }
 
-// TaskStart fires when the model delegates to a sub-agent.
-type TaskStart struct{ Description string }
+// TaskStart fires when the model delegates to a sub-agent. ID names the child
+// for the life of the task, so a frontend can follow several at once.
+type TaskStart struct {
+	ID          string
+	Description string
+}
 
 // TaskEnd carries what the sub-agent reported back.
 type TaskEnd struct {
+	ID          string
 	Description string
 	Summary     string
 	Steps       int
@@ -165,12 +177,16 @@ type Agent struct {
 	// not part of the message list but they are very much part of the prompt:
 	// leaving them out understates a small model's usage by hundreds of tokens.
 	schemaTokens int
-	// out is the current turn's event channel. A turn is single-threaded, so
-	// tools that report progress of their own — the sub-agent tool — can reach
-	// the frontend through it.
+	// out is the current turn's event channel. Delegated tasks run concurrently,
+	// so several goroutines can write to it; Go channels are safe for that, and
+	// the frontend sees one interleaved stream tagged by task.
 	out chan<- Event
 	// depth is zero for the main conversation and one inside a sub-agent.
 	depth int
+	// approving serialises approval prompts across the whole agent tree. Shared
+	// with sub-agents by pointer, like health: the user has one keyboard, and
+	// two questions at once would have an answer land on the wrong one.
+	approving *sync.Mutex
 }
 
 func New(c *provider.Client, r *tools.Registry, system string) *Agent {
@@ -178,11 +194,12 @@ func New(c *provider.Client, r *tools.Registry, system string) *Agent {
 		system = DefaultSystem
 	}
 	return &Agent{
-		client:   c,
-		tools:    r,
-		health:   newHealth(),
-		system:   system,
-		messages: []provider.Message{{Role: provider.System, Content: system}},
+		client:    c,
+		tools:     r,
+		health:    newHealth(),
+		approving: &sync.Mutex{},
+		system:    system,
+		messages:  []provider.Message{{Role: provider.System, Content: system}},
 	}
 }
 
@@ -368,6 +385,17 @@ func (a *Agent) Reset() { a.messages = a.messages[:1] }
 // approve asks the frontend to allow a call, returning false if the turn is
 // cancelled while waiting.
 func (a *Agent) approve(ctx context.Context, tc provider.ToolCall, out chan<- Event) bool {
+	// One question at a time. Concurrent sub-agents can each reach a mutating
+	// tool at the same moment, and two prompts racing for one y/n would have
+	// the answer land on whichever asked last — approving something the user
+	// never saw. The lock is shared with the caller, so the whole tree queues.
+	a.approving.Lock()
+	defer a.approving.Unlock()
+	// Nothing is worth approving once the turn is cancelled.
+	if ctx.Err() != nil {
+		return false
+	}
+
 	reply := make(chan bool, 1)
 	out <- Approval{Name: tc.Function.Name, Args: tc.Function.Arguments, Reply: reply}
 	select {
@@ -546,25 +574,66 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			return
 		}
 
-		for _, tc := range msg.ToolCalls {
-			result, err := a.dispatch(ctx, tc, out)
+		results := a.dispatchAll(ctx, msg.ToolCalls, out)
+		for i, tc := range msg.ToolCalls {
 			a.messages = append(a.messages, provider.Message{
 				Role:       provider.ToolRole,
 				ToolCallID: tc.ID,
 				Name:       tc.Function.Name,
-				Content:    result,
+				// Results are appended in the order the model asked for them,
+				// whatever order they finished in: a tool result that does not
+				// follow its call is rejected by the API.
+				Content: results[i],
 			})
-			// The error is reported to the user and handed to the model as
-			// text, so it can correct itself rather than stall.
-			_ = err
-
-			if ctx.Err() != nil {
-				out <- Failed{Err: ctx.Err()}
-				return
-			}
+		}
+		if ctx.Err() != nil {
+			out <- Failed{Err: ctx.Err()}
+			return
 		}
 	}
 	out <- Failed{Err: fmt.Errorf("gave up after %d steps", steps)}
+}
+
+// dispatchAll runs a batch of tool calls and returns their results in the order
+// asked for. Delegated tasks run concurrently with each other: a sub-agent
+// spends most of its time waiting on a model, so three of them against a hosted
+// endpoint finish in roughly the time of the slowest rather than the sum.
+//
+// Everything else stays sequential. Ordinary tools touch the working directory
+// — two edits to one file, or a build racing a write, is a worse failure than
+// any saving is worth — and they return quickly enough that there is nothing to
+// win. Tasks are the exception because they are pure investigation: a sub-agent
+// reports back and changes nothing the caller can see.
+func (a *Agent) dispatchAll(ctx context.Context, calls []provider.ToolCall, out chan<- Event) []string {
+	results := make([]string, len(calls))
+
+	// Run the delegated ones first, in the background, then work through the
+	// rest here. By the time the sequential calls are done the tasks have had
+	// that long to run for free.
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		if tc.Function.Name != "task" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, tc provider.ToolCall) {
+			defer wg.Done()
+			results[i], _ = a.dispatch(ctx, tc, out)
+		}(i, tc)
+	}
+	for i, tc := range calls {
+		if tc.Function.Name == "task" {
+			continue
+		}
+		// The error is reported to the user and handed to the model as text, so
+		// it can correct itself rather than stall.
+		results[i], _ = a.dispatch(ctx, tc, out)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	wg.Wait()
+	return results
 }
 
 func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- Event) (string, error) {

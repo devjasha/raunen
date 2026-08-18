@@ -202,8 +202,15 @@ type Model struct {
 	// comp is the mascot's progress, which spans every session and provider
 	// rather than belonging to any one of them.
 	comp *companion.Companion
-	// sub is the panel a running sub-agent works in, nil when none is running.
-	sub *subView
+	// subs are the sub-agents currently running, in the order they started.
+	// Several can be in flight at once, so this is a list rather than the one
+	// panel it used to be; watching is one at a time, since only one of them
+	// can have the rows.
+	subs []*subView
+	// watching is the id of the sub-agent whose panel is open, empty when the
+	// panel is closed. Kept as an id rather than an index so a sibling
+	// finishing does not shift what is being watched.
+	watching string
 	// queued is a message typed while the agent was busy. The model cannot take
 	// it mid-turn — it is blocked on a tool result it asked for — so it is held
 	// and sent the moment the turn ends.
@@ -483,6 +490,43 @@ func (m Model) blockText(block int) string {
 	return strings.Join(lines, "\n")
 }
 
+// sub finds a running sub-agent by id, nil when it has finished or never was.
+func (m Model) sub(id string) *subView {
+	for _, s := range m.subs {
+		if s.id == id {
+			return s
+		}
+	}
+	return nil
+}
+
+// watched is the sub-agent whose panel is open, nil when none is. Kept as an id
+// rather than an index so a sibling finishing does not shift what is watched.
+func (m Model) watched() *subView {
+	if m.watching == "" {
+		return nil
+	}
+	return m.sub(m.watching)
+}
+
+// dropSub removes a finished sub-agent, moving the watch to another one that is
+// still running rather than closing the panel out from under the reader.
+func (m *Model) dropSub(id string) {
+	out := m.subs[:0]
+	for _, s := range m.subs {
+		if s.id != id {
+			out = append(out, s)
+		}
+	}
+	m.subs = out
+	if m.watching == id {
+		m.watching = ""
+		if len(m.subs) > 0 {
+			m.watching = m.subs[0].id
+		}
+	}
+}
+
 // newBlock starts a new message, so a click can select one whole.
 func (m *Model) newBlock() { m.blockSeq++ }
 
@@ -599,8 +643,8 @@ func (m Model) viewHeight() int {
 	if m.keyAsk != nil {
 		h -= m.keyAsk.height()
 	}
-	if m.sub != nil {
-		h -= m.sub.height()
+	if w := m.watched(); w != nil {
+		h -= w.height()
 	}
 	if m.sug != nil {
 		h -= m.sug.height()
@@ -681,9 +725,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.cancel = nil
 		m.events = nil
-		// A sub-agent cannot outlive the turn that spawned it, so the panel
-		// closes here even if the turn ended badly.
-		m.sub = nil
+		// A sub-agent cannot outlive the turn that spawned it, so the panels
+		// close here even if the turn ended badly.
+		m.subs = nil
+		m.watching = ""
 		m.input.Focus()
 		if q := m.queued; q != "" {
 			m.queued = ""
@@ -951,12 +996,32 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Open or close the sub-agent panel. Doing nothing when none is running
 		// is deliberate: the key means "show me the sub-agent", and inventing
 		// something for it to do when there isn't one would only surprise.
-		if m.sub != nil {
-			m.sub.open = !m.sub.open
-			// The panel takes its rows from the transcript, so what is visible
-			// changes under the reader; keep the newest end in view.
-			m.clampScroll()
+		// With several running, the key steps through them and then closes:
+		// watch the first, the second, … and the press after the last puts the
+		// panel away. One key covers both "look" and "look at the other one".
+		switch {
+		case len(m.subs) == 0:
+			// Nothing running. Inventing something for the key to do here would
+			// only surprise.
+		case m.watching == "":
+			m.watching = m.subs[0].id
+		default:
+			i := 0
+			for j, s := range m.subs {
+				if s.id == m.watching {
+					i = j
+					break
+				}
+			}
+			if i+1 < len(m.subs) {
+				m.watching = m.subs[i+1].id
+			} else {
+				m.watching = ""
+			}
 		}
+		// The panel takes its rows from the transcript, so what is visible
+		// changes under the reader; keep the newest end in view.
+		m.clampScroll()
 		return *m, nil
 
 	// The terminal's own scrollback cannot see the transcript on the alternate
@@ -1230,9 +1295,9 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		if e.Name == "task" && e.Depth == 0 {
 			return *m, next
 		}
-		if e.Depth > 0 && m.sub != nil {
-			m.sub.steps++
-			m.sub.add(toolStyle.Render("⏺ "+e.Name) +
+		if s := m.sub(e.Task); s != nil {
+			s.steps++
+			s.add(toolStyle.Render("⏺ "+e.Name) +
 				dimStyle.Render("  "+summarize(e.Args, max(10, m.innerWidth()-len(e.Name)-14))))
 			return *m, next
 		}
@@ -1257,8 +1322,8 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		if e.Err != nil {
 			text, style = e.Err.Error(), workErr
 		}
-		if e.Depth > 0 && m.sub != nil {
-			m.sub.add("  " + workDim.Render("↳ ") + style.Render(text))
+		if s := m.sub(e.Task); s != nil {
+			s.add("  " + workDim.Render("↳ ") + style.Render(text))
 			return *m, next
 		}
 		pad := strings.Repeat("  ", 2+e.Depth)
@@ -1276,7 +1341,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.flush()
 		m.inText = false
 		// The panel opens here and takes the sub-agent's steps from now on.
-		m.sub = &subView{desc: e.Description}
+		m.subs = append(m.subs, &subView{id: e.ID, desc: e.Description})
 		m.pushKind(entry{
 			kind:  kindWork,
 			first: "  " + taskStyle.Render("◆ "),
@@ -1288,7 +1353,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	case agent.TaskEnd:
 		// The panel collapses, leaving one line in the transcript. What the
 		// sub-agent did was working-out, not conversation.
-		m.sub = nil
+		m.dropSub(e.ID)
 		text, style := fmt.Sprintf("returned %d chars after %d steps", len(e.Summary), e.Steps), workDim
 		if e.Err != nil {
 			text, style = e.Err.Error(), workErr
@@ -1649,9 +1714,16 @@ func (m Model) View() tea.View {
 
 	rows := make([]string, 0, m.height)
 	rows = append(rows, m.transcript()...)
-	if m.sub != nil && m.sub.open {
+	if w := m.watched(); w != nil {
 		f := spinnerFrames[m.frame%len(spinnerFrames)]
-		rows = append(rows, strings.Split(m.sub.render(m.innerWidth(), f), "\n")...)
+		i := 0
+		for j, s := range m.subs {
+			if s.id == w.id {
+				i = j
+				break
+			}
+		}
+		rows = append(rows, strings.Split(w.render(m.innerWidth(), f, i, len(m.subs)), "\n")...)
 	}
 	if m.pick != nil {
 		rows = append(rows, strings.Split(m.pick.render(m.innerWidth(), m.ref), "\n")...)
@@ -1668,12 +1740,12 @@ func (m Model) View() tea.View {
 			dimStyle.Render(" "+summarize(m.ask.Args, max(10, m.innerWidth()-40))) +
 			askStyle.Render("   y") + dimStyle.Render(" approve  ") +
 			askStyle.Render("n") + dimStyle.Render(" decline")
-	} else if m.sub != nil && !m.sub.open {
-		// A sub-agent is running with its panel closed. This says so on the row
+	} else if len(m.subs) > 0 && m.watching == "" {
+		// Sub-agents are running with the panel closed. This says so on the row
 		// that is already there, rather than taking rows from the transcript to
 		// show working-out nobody asked to see.
 		f := spinnerFrames[m.frame%len(spinnerFrames)]
-		status = m.sub.hint(f, m.innerWidth())
+		status = subsHint(m.subs, f, m.innerWidth())
 	} else if m.busy {
 		f := spinnerFrames[m.frame%len(spinnerFrames)]
 		// The model is mid-turn. Its thinking is not shown, so this only
@@ -1735,8 +1807,8 @@ func (m Model) View() tea.View {
 	// reads as somewhere to type rather than a static list.
 	if m.pick != nil {
 		cur := tea.NewCursor(padX+1+m.pick.cursorCol(), m.viewHeight()+1)
-		if m.sub != nil {
-			cur.Y += m.sub.height()
+		if w := m.watched(); w != nil {
+			cur.Y += w.height()
 		}
 		v.Cursor = cur
 		return v
@@ -1747,8 +1819,8 @@ func (m Model) View() tea.View {
 			// Past the transcript and status row, the prompt's own border, and
 			// the two heading rows inside it.
 			cur.Y += m.viewHeight() + 1 + 3
-			if m.sub != nil {
-				cur.Y += m.sub.height()
+			if w := m.watched(); w != nil {
+				cur.Y += w.height()
 			}
 			cur.X += boxPadX + 1 + padX
 			v.Cursor = cur
@@ -1761,8 +1833,8 @@ func (m Model) View() tea.View {
 		if m.replyTo != "" {
 			below++
 		}
-		if m.sub != nil {
-			below += m.sub.height()
+		if w := m.watched(); w != nil {
+			below += w.height()
 		}
 		if m.pick != nil {
 			below += m.pick.height()
