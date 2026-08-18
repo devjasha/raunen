@@ -461,8 +461,10 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			}
 		}
 		// Only reached if the ladder ran out, and a no-op if the request now
-		// fits on a roomier model.
-		a.trim(out)
+		// fits on a roomier model. Summarising is tried before anything is
+		// dropped: the room is the same either way, and what it costs the model
+		// to remember is not.
+		a.reduce(ctx, out)
 
 		msg, usage, err := a.client.Stream(ctx, a.messages, schemas, provider.Handler{
 			Text:      func(s string) { out <- TextDelta{Text: s} },

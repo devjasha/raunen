@@ -1385,7 +1385,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		if m.contextNearlyFull() && !m.warnedFull {
 			m.warnedFull = true
 			m.add(errStyle.Render(fmt.Sprintf(
-				"⚠ context %d%% full — replies will degrade. /clear to reset, or raise the model's context.",
+				"⚠ context %d%% full — replies will degrade. /compact to summarise it, /clear to start over.",
 				m.ctxTokens*100/m.contextLimit())))
 		}
 		return *m, next
@@ -1456,6 +1456,41 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 				" repeat work it has already done"))
 		return *m, next
 
+	case agent.Compacted:
+		// The count the user cares about is the room won back, so it leads.
+		saved := 0
+		if e.Before > 0 {
+			saved = (e.Before - e.After) * 100 / e.Before
+		}
+		how := "compacted"
+		if e.Auto {
+			how = "context was full, so the conversation was compacted"
+		}
+		m.blank()
+		m.add(okStyle.Render(fmt.Sprintf("⋯ %s — %d messages into a summary, %d%% smaller",
+			how, e.Replaced, saved)))
+		m.add(dimStyle.Render(fmt.Sprintf("  %s → %s tokens, keeping the last %d messages in full",
+			humanTokens(e.Before), humanTokens(e.After), e.Kept)))
+		// The estimate is what the agent works from; the real count arrives
+		// with the next reply. Showing the estimate now stops the bar reading
+		// full against a conversation that is no longer there.
+		m.ctxTokens = e.After
+		m.warnedFull = false
+		m.persist()
+		return *m, next
+
+	case agent.CompactFailed:
+		// Not a failed turn. Mid-turn the loop carries on and trims instead,
+		// which Trimmed reports on its own; on demand the conversation is
+		// simply unchanged. Either way the reason already reads as a sentence,
+		// so it is shown as one rather than wrapped in another.
+		why := e.Err.Error()
+		if errors.Is(e.Err, context.Canceled) {
+			why = "compacting was cancelled"
+		}
+		m.add(askStyle.Render("⋯ " + why))
+		return *m, next
+
 	case agent.TurnEnd:
 		m.think = ""
 		m.comp.Turns++
@@ -1488,7 +1523,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			// in the tool rather than a limit being hit.
 			if m.contextNearlyFull() {
 				m.add(errStyle.Render(
-					"(no reply — the context is full. /clear to reset, or raise the model's context.)"))
+					"(no reply — the context is full. /compact to summarise it, /clear to start over.)"))
 			} else {
 				m.add(dimStyle.Render("(no reply)"))
 			}
@@ -1653,6 +1688,32 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		}
 		m.keyAsk = newKeyPrompt(name, p.APIKeyEnv, "")
 		return *m, nil
+
+	case "/compact":
+		if m.busy {
+			m.add(errStyle.Render("✗ /compact has to wait for the turn to finish"))
+			return *m, nil
+		}
+		// Driven over the same event channel as a turn, so it gets the spinner,
+		// esc to cancel and the busy state without any machinery of its own.
+		focus := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		m.busy = true
+		m.frame = 0
+		m.events = make(chan agent.Event, 8)
+		m.scroll = 0
+		go m.ag.RunCompact(ctx, focus, m.events)
+
+		m.blank()
+		note := "⋯ compacting the conversation…"
+		if focus != "" {
+			// Quoted rather than folded into the sentence: it is whatever the
+			// user typed, and no phrasing reads well around all of it.
+			note = fmt.Sprintf("⋯ compacting the conversation, keeping %q in view…", focus)
+		}
+		m.add(askStyle.Render(note))
+		return *m, tea.Batch(waitFor(m.events), tick())
 
 	case "/companion", "/comp":
 		for _, e := range m.companionRows() {
