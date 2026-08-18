@@ -18,6 +18,29 @@ export const Route = createRootRoute({
         content:
           "A small terminal agent for local LLMs. One Go binary, no runtime, no server.",
       },
+      // Social preview: a thumbnail and caption when the link is shared.
+      { property: "og:type", content: "website" },
+      { property: "og:title", content: "raunen — a terminal agent for local LLMs" },
+      {
+        property: "og:description",
+        content:
+          "A small terminal agent for local LLMs. One Go binary, no runtime, no server.",
+      },
+      { property: "og:image", content: "/og-image.png" },
+      { property: "og:image:width", content: "3168" },
+      { property: "og:image:height", content: "2050" },
+      {
+        property: "og:image:alt",
+        content: "raunen terminal showing a chat with a local LLM",
+      },
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "raunen — a terminal agent for local LLMs" },
+      {
+        name: "twitter:description",
+        content:
+          "A small terminal agent for local LLMs. One Go binary, no runtime, no server.",
+      },
+      { name: "twitter:image", content: "/og-image.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
