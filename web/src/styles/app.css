@@ -1,6 +1,7 @@
 /* raunen.dev — one stylesheet, no build step, no dependencies.
    Monospace throughout: the product is a terminal, and a page about it that
-   looks like a SaaS landing page is describing something else. */
+   looks like a SaaS landing page is describing something else. A floating
+   glass navbar and a lit "stage" give it a modern, clean frame. */
 
 :root {
   --font-mono: "Berkeley Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular,
@@ -11,9 +12,6 @@
   --fg-strong: hsl(0, 5%, 12%);
   --bg: hsl(0, 20%, 99%);
   --bg-weak: hsl(0, 8%, 97%);
-  --bg-strong: hsl(0, 5%, 12%);
-  --border: hsl(30, 2%, 81%);
-  --border-weak: hsla(0, 100%, 3%, 0.12);
 
   /* The one colour on the page. It is the dragon, and the accent everywhere
      else, so the amber context bar in the screenshots has a counterpart. */
@@ -21,8 +19,22 @@
   --accent-weak: hsl(38, 90%, 95%);
   --ok: hsl(142, 60%, 33%);
 
+  /* Glass surfaces sit over a faint tint so the blur reads even on a flat
+     background, and the stage glow is a soft echo of the accent. */
+  --glass: hsla(0, 0%, 100%, 0.6);
+  --glass-border: hsla(0, 0%, 0%, 0.08);
+  --stage: radial-gradient(
+    120% 120% at 50% 0%,
+    hsl(28, 82%, 46%, 0.1),
+    transparent 60%
+  );
+
   --measure: 68rem;
   --pad: 2rem;
+  --radius: 16px;
+  --radius-sm: 9px;
+  --nav-h: 3.75rem;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,12 +44,17 @@
     --fg-strong: hsl(0, 15%, 94%);
     --bg: hsl(0, 9%, 7%);
     --bg-weak: hsl(0, 6%, 10%);
-    --bg-strong: hsl(0, 15%, 94%);
-    --border: hsl(0, 3%, 28%);
-    --border-weak: hsl(0, 4%, 23%);
     --accent: hsl(33, 90%, 60%);
     --accent-weak: hsl(30, 25%, 12%);
     --ok: hsl(142, 45%, 55%);
+
+    --glass: hsla(0, 0%, 9%, 0.55);
+    --glass-border: hsla(0, 0%, 100%, 0.1);
+    --stage: radial-gradient(
+      120% 120% at 50% 0%,
+      hsla(33, 90%, 60%, 0.14),
+      transparent 60%
+    );
   }
 }
 
@@ -49,6 +66,7 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
 }
 
 body {
@@ -64,8 +82,9 @@ body {
 
 a {
   color: var(--fg-strong);
-  text-decoration-color: var(--border);
+  text-decoration-color: var(--border-weak, var(--glass-border));
   text-underline-offset: 0.2em;
+  transition: color 0.18s var(--ease);
 }
 
 a:hover {
@@ -94,24 +113,29 @@ code {
 
 .rule {
   border: 0;
-  border-top: 1px solid var(--border-weak);
+  border-top: 1px solid var(--glass-border);
   margin: 0;
 }
 
-/* ── header ─────────────────────────────────────────────────────────── */
+/* ── floating glass navigation ─────────────────────────────────────────── */
 
 header {
   position: sticky;
-  top: 0;
-  z-index: 10;
-  /* Solid first: relative-colour syntax is recent, and where it is not
-     understood the whole declaration is dropped — leaving a transparent
-     header with the transcript scrolling through it. */
-  background: var(--bg);
-  background: hsl(from var(--bg) h s l / 0.85);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border-weak);
+  top: 1rem;
+  z-index: 50;
+  /* Solid fallback up front: where the colour-mix/relative syntax is not
+     understood the declaration is dropped, leaving a transparent bar. */
+  background: var(--glass);
+}
+
+@supports (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  header {
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    backdrop-filter: blur(14px) saturate(160%);
+  }
 }
 
 header .wrap {
@@ -119,34 +143,68 @@ header .wrap {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  height: 3.25rem;
+  height: var(--nav-h);
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: 0 0.75rem 0 var(--pad);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+  box-shadow:
+    0 1px 0 hsla(0, 0%, 100%, 0.6) inset,
+    0 10px 30px -12px hsla(0, 0%, 0%, 0.25);
+  transition: transform 0.3s var(--ease), box-shadow 0.3s var(--ease);
+}
+
+@media (prefers-color-scheme: dark) {
+  header .wrap {
+    box-shadow:
+      0 1px 0 hsla(0, 0%, 100%, 0.08) inset,
+      0 14px 40px -12px hsla(0, 0%, 0%, 0.6);
+  }
 }
 
 .brand {
   color: var(--fg-strong);
   text-decoration: none;
   font-weight: 500;
+  letter-spacing: -0.01em;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
 }
 
 .brand::before {
   content: "▌";
   color: var(--accent);
-  margin-right: 0.4em;
+  margin-right: 0.45em;
+  font-size: 0.85em;
 }
 
 nav {
   display: flex;
-  gap: 1.25rem;
+  align-items: center;
+  gap: 0.25rem;
   font-size: 0.8125rem;
 }
 
 nav a {
   color: var(--fg-weak);
   text-decoration: none;
+  padding: 0.4rem 0.85rem;
+  border-radius: 999px;
+  transition: color 0.18s var(--ease), background 0.18s var(--ease);
 }
 
 nav a:hover {
-  color: var(--accent);
+  color: var(--fg-strong);
+  background: hsla(0, 0%, 50%, 0.12);
+}
+
+nav a.opt {
+  color: var(--fg-strong);
 }
 
 @media (max-width: 34rem) {
@@ -158,7 +216,7 @@ nav a:hover {
 /* ── hero ───────────────────────────────────────────────────────────── */
 
 .hero {
-  padding: 4.5rem 0 3.5rem;
+  padding: 5rem 0 3.5rem;
 }
 
 .dragon {
@@ -196,9 +254,10 @@ h1 {
   flex-wrap: wrap;
   padding: 0.875rem 1rem;
   background: var(--bg-weak);
-  border: 1px solid var(--border-weak);
-  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
   max-width: 46rem;
+  box-shadow: 0 1px 2px hsla(0, 0%, 0%, 0.04);
 }
 
 .install code {
@@ -219,10 +278,11 @@ button.copy {
   font-size: 0.75rem;
   color: var(--fg);
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
   cursor: pointer;
+  transition: color 0.18s var(--ease), border-color 0.18s var(--ease);
 }
 
 button.copy:hover {
@@ -238,29 +298,61 @@ button.copy:hover {
 
 /* ── terminal frame ─────────────────────────────────────────────────── */
 
+/* The stage: a soft-lit plinth the terminal sits on, giving the hero a
+   focal point. The glow echoes the accent without a hard edge. */
+.stage {
+  background: var(--stage);
+  border-radius: calc(var(--radius) + 8px);
+  padding: 2.5rem 2rem;
+  margin: 0 0 1rem;
+}
+
 .term {
-  background: var(--bg-weak);
-  border: 1px solid var(--border-weak);
-  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
   margin: 0;
   overflow: hidden;
+  box-shadow:
+    0 1px 0 hsla(0, 0%, 100%, 0.5) inset,
+    0 24px 60px -24px hsla(0, 0%, 0%, 0.45);
+}
+
+@media (prefers-color-scheme: dark) {
+  .term {
+    background: hsl(0, 10%, 9%);
+    box-shadow:
+      0 1px 0 hsla(0, 0%, 100%, 0.06) inset,
+      0 24px 60px -20px hsla(0, 0%, 0%, 0.8);
+  }
 }
 
 .term-bar {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--border-weak);
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--glass-border);
   font-size: 0.6875rem;
   color: var(--fg-weak);
+  background: var(--bg-weak);
 }
 
 .dot {
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.55rem;
+  height: 0.55rem;
   border-radius: 50%;
-  background: var(--border);
+  background: var(--glass-border);
+}
+
+.dot:nth-child(1) {
+  background: hsl(6, 75%, 62%);
+}
+.dot:nth-child(2) {
+  background: hsl(42, 90%, 58%);
+}
+.dot:nth-child(3) {
+  background: hsl(142, 55%, 50%);
 }
 
 .term-bar .title {
@@ -269,10 +361,11 @@ button.copy:hover {
 
 .term pre {
   margin: 0;
-  padding: 1rem;
+  padding: 1.1rem;
   font-size: 0.75rem;
-  line-height: 1.55;
+  line-height: 1.6;
   overflow-x: auto;
+  color: var(--fg);
 }
 
 /* Colours inside the transcripts, matching what the TUI actually prints. */
@@ -312,15 +405,20 @@ section > .wrap > h2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 1px;
-  background: var(--border-weak);
-  border: 1px solid var(--border-weak);
-  border-radius: 6px;
+  background: var(--glass-border);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
 .cell {
   background: var(--bg);
   padding: 1.5rem;
+  transition: background 0.18s var(--ease);
+}
+
+.cell:hover {
+  background: var(--bg-weak);
 }
 
 .cell h3 {
@@ -340,13 +438,63 @@ section > .wrap > h2 {
   color: var(--fg-weak);
 }
 
+/* ── companion levels ──────────────────────────────────────────────── */
+
+.levels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.level {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--bg-weak);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  transition: transform 0.18s var(--ease), border-color 0.18s var(--ease);
+}
+
+.level:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+}
+
+.level .n {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.level .name {
+  color: var(--fg-strong);
+}
+
+/* The capstone: the level you are working toward, set apart so the
+   progression reads as a climb rather than a flat list. */
+.level.final {
+  grid-column: 1 / -1;
+  justify-content: center;
+  background: var(--accent-weak);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.level.final .name::after {
+  content: " · 10M tokens";
+  color: var(--fg-weak);
+  font-size: 0.75rem;
+}
+
 /* ── split rows ─────────────────────────────────────────────────────── */
 
 .split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
   gap: 2.5rem;
-  align-items: start;
+  align-items: center;
 }
 
 @media (max-width: 52rem) {
@@ -387,8 +535,8 @@ table {
 th,
 td {
   text-align: left;
-  padding: 0.55rem 0.75rem;
-  border-bottom: 1px solid var(--border-weak);
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--glass-border);
   vertical-align: top;
 }
 
@@ -408,7 +556,7 @@ footer {
   padding: 2.5rem 0 3.5rem;
   font-size: 0.8125rem;
   color: var(--fg-weak);
-  border-top: 1px solid var(--border-weak);
+  border-top: 1px solid var(--glass-border);
 }
 
 footer .wrap {
@@ -427,6 +575,7 @@ footer a {
   * {
     animation: none !important;
     transition: none !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -437,7 +586,7 @@ footer a {
   grid-template-columns: 14rem minmax(0, 1fr);
   gap: 3rem;
   align-items: start;
-  padding: 2.5rem 0 4rem;
+  padding: 3rem 0 4rem;
 }
 
 @media (max-width: 52rem) {
@@ -449,15 +598,19 @@ footer a {
 
 .sidebar {
   position: sticky;
-  top: 4.25rem;
+  top: calc(var(--nav-h) + 2rem);
   font-size: 0.8125rem;
+  padding: 1.25rem;
+  background: var(--bg-weak);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
 }
 
 @media (max-width: 52rem) {
   .sidebar {
     position: static;
-    border-bottom: 1px solid var(--border-weak);
-    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--glass-border);
+    padding: 1rem;
   }
 }
 
@@ -484,17 +637,22 @@ footer a {
   color: var(--fg-weak);
   text-decoration: none;
   display: block;
-  padding: 0.15rem 0;
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--radius-sm);
+  transition: color 0.18s var(--ease), background 0.18s var(--ease);
 }
 
 .sidebar a:hover {
-  color: var(--accent);
+  color: var(--fg-strong);
+  background: hsla(0, 0%, 50%, 0.12);
 }
 
 /* Set by TanStack Router on the link matching the current route, so the
    sidebar says where you are without any state of its own. */
 .sidebar a.active {
   color: var(--fg-strong);
+  background: hsla(0, 0%, 50%, 0.14);
+  font-weight: 500;
 }
 
 .sidebar a.active::before {
@@ -564,6 +722,7 @@ footer a {
   padding: 0.875rem 1rem;
   margin: 0 0 1.25rem;
   font-size: 0.875rem;
+  border-radius: var(--radius-sm);
 }
 
 .note p:last-child {
@@ -576,9 +735,9 @@ footer a {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
   gap: 1px;
-  background: var(--border-weak);
-  border: 1px solid var(--border-weak);
-  border-radius: 6px;
+  background: var(--glass-border);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
   overflow: hidden;
   margin: 0 0 1.5rem;
 }
@@ -586,6 +745,11 @@ footer a {
 .price {
   background: var(--bg);
   padding: 1.5rem;
+  transition: background 0.18s var(--ease);
+}
+
+.price:hover {
+  background: var(--bg-weak);
 }
 
 .price h3 {
@@ -634,15 +798,19 @@ footer a {
   gap: 1rem;
   margin-top: 3rem;
   padding-top: 1.25rem;
-  border-top: 1px solid var(--border-weak);
+  border-top: 1px solid var(--glass-border);
   font-size: 0.8125rem;
 }
 
 .pager a {
   color: var(--fg-weak);
   text-decoration: none;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  transition: color 0.18s var(--ease), background 0.18s var(--ease);
 }
 
 .pager a:hover {
-  color: var(--accent);
+  color: var(--fg-strong);
+  background: hsla(0, 0%, 50%, 0.12);
 }

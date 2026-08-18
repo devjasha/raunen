@@ -21,6 +21,7 @@ import { Route as DocsMcpRouteImport } from './routes/docs/mcp'
 import { Route as DocsModelsRouteImport } from './routes/docs/models'
 import { Route as DocsModesRouteImport } from './routes/docs/modes'
 import { Route as DocsSubagentsRouteImport } from './routes/docs/subagents'
+import { Route as DocsTmuxRouteImport } from './routes/docs/tmux'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -82,6 +83,11 @@ const DocsSubagentsRoute = DocsSubagentsRouteImport.update({
   path: '/subagents',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsTmuxRoute = DocsTmuxRouteImport.update({
+  id: '/tmux',
+  path: '/tmux',
+  getParentRoute: () => DocsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
   '/docs/subagents': typeof DocsSubagentsRoute
+  '/docs/tmux': typeof DocsTmuxRoute
   '/docs/': typeof DocsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -108,6 +115,7 @@ export interface FileRoutesByTo {
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
   '/docs/subagents': typeof DocsSubagentsRoute
+  '/docs/tmux': typeof DocsTmuxRoute
   '/docs': typeof DocsIndexRoute
 }
 export interface FileRoutesById {
@@ -123,6 +131,7 @@ export interface FileRoutesById {
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
   '/docs/subagents': typeof DocsSubagentsRoute
+  '/docs/tmux': typeof DocsTmuxRoute
   '/docs/': typeof DocsIndexRoute
 }
 export interface FileRouteTypes {
@@ -139,6 +148,7 @@ export interface FileRouteTypes {
     | '/docs/models'
     | '/docs/modes'
     | '/docs/subagents'
+    | '/docs/tmux'
     | '/docs/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -152,6 +162,7 @@ export interface FileRouteTypes {
     | '/docs/models'
     | '/docs/modes'
     | '/docs/subagents'
+    | '/docs/tmux'
     | '/docs'
   id:
     | '__root__'
@@ -166,6 +177,7 @@ export interface FileRouteTypes {
     | '/docs/models'
     | '/docs/modes'
     | '/docs/subagents'
+    | '/docs/tmux'
     | '/docs/'
   fileRoutesById: FileRoutesById
 }
@@ -261,6 +273,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsSubagentsRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/tmux': {
+      id: '/docs/tmux'
+      path: '/tmux'
+      fullPath: '/docs/tmux'
+      preLoaderRoute: typeof DocsTmuxRouteImport
+      parentRoute: typeof DocsRoute
+    }
   }
 }
 
@@ -273,6 +292,7 @@ interface DocsRouteChildren {
   DocsModelsRoute: typeof DocsModelsRoute
   DocsModesRoute: typeof DocsModesRoute
   DocsSubagentsRoute: typeof DocsSubagentsRoute
+  DocsTmuxRoute: typeof DocsTmuxRoute
   DocsIndexRoute: typeof DocsIndexRoute
 }
 
@@ -285,6 +305,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsModelsRoute: DocsModelsRoute,
   DocsModesRoute: DocsModesRoute,
   DocsSubagentsRoute: DocsSubagentsRoute,
+  DocsTmuxRoute: DocsTmuxRoute,
   DocsIndexRoute: DocsIndexRoute,
 }
 

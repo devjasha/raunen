@@ -57,6 +57,10 @@ function Overview() {
           the Ollama catch that bites everyone.
         </li>
         <li>
+          <Link to="/docs/tmux">Using tmux</Link> — jump between running instances
+          with <code>prefix + R</code>.
+        </li>
+        <li>
           <Link to="/cost">What it costs</Link> — free, and how to keep it that
           way.
         </li>

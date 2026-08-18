@@ -56,6 +56,7 @@ function Home() {
         </div>
 
         <div className="wrap">
+          <div className="stage">
           <Term title="~/Projects/raunen">
             <D>{"  ──────────────────────────────────────────────────────── 10:42\n"}</D>
             <U>{"  ▌ what does main.go do?\n"}</U>
@@ -77,6 +78,7 @@ function Home() {
             {"  ╰────────────────────────────────────────────────────────────╯\n"}
             <D>{"  auto · ⎇ main · qwen3.5-8k:latest · ██░░░░░░░░ 22% · 1.8k"}</D>
           </Term>
+          </div>
         </div>
 
         <section>
@@ -221,6 +223,49 @@ function Home() {
                 <G>{"411 models"}</G>
                 {"   needs key"}
               </Term>
+            </div>
+          </div>
+        </section>
+
+        <hr className="rule" />
+
+        <section>
+          <div className="wrap">
+            <div className="split">
+              <div>
+                <pre className="dragon" aria-hidden="true" style={{ marginBottom: "1.5rem" }}>
+                  {DRAGON}
+                </pre>
+                <h2>Levels you actually earn</h2>
+                <p>
+                  The dragon is not decoration: it grows on the one thing every
+                  provider charges in, which is context. Feed it enough — across
+                  every model, every session — and you climb from a quiet{" "}
+                  <strong>Hush</strong> to a roaring <strong>Thunder</strong>.
+                </p>
+                <p>
+                  It is yours, not a model's, and it carries forward between
+                  sessions, so the work you put in shows up next time you open
+                  raunen.
+                </p>
+                <p>
+                  <a href={`${REPO}#the-companion`}>How levels work →</a>
+                </p>
+              </div>
+              <div>
+                <div className="levels">
+                  <div className="level"><span className="n">1</span><span className="name">Hush</span></div>
+                  <div className="level"><span className="n">2</span><span className="name">Whisper</span></div>
+                  <div className="level"><span className="n">3</span><span className="name">Murmur</span></div>
+                  <div className="level"><span className="n">4</span><span className="name">Rumour</span></div>
+                  <div className="level"><span className="n">5</span><span className="name">Echo</span></div>
+                  <div className="level"><span className="n">6</span><span className="name">Chant</span></div>
+                  <div className="level"><span className="n">7</span><span className="name">Chorus</span></div>
+                  <div className="level"><span className="n">8</span><span className="name">Bellow</span></div>
+                  <div className="level"><span className="n">9</span><span className="name">Roar</span></div>
+                  <div className="level final"><span className="n">10</span><span className="name">Thunder</span></div>
+                </div>
+              </div>
             </div>
           </div>
         </section>

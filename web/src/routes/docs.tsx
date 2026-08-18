@@ -31,6 +31,7 @@ const NAV = [
     items: [
       { to: "/docs/mcp", label: "MCP servers" },
       { to: "/docs/local-models", label: "Local models" },
+      { to: "/docs/tmux", label: "Using tmux" },
     ],
   },
 ] as const;
