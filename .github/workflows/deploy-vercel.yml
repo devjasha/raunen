@@ -42,17 +42,23 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       - name: Build
-        # Build the prerendered site ourselves with the proven npm script
-        # (TanStack Start + vite). We skip `vercel build` and deploy with
-        # --prebuilt so Vercel ships dist/client as-is instead of running
-        # its own build command, which can't resolve the SPA entry.
+        # Build the prerendered site with the proven npm script (TanStack
+        # Start + vite) into dist/client.
         run: npm run build
 
+      - name: Package build output
+        # Assemble a Build Output API tree (.vercel/output/static) from the
+        # prerendered dist/client. Deploying with --prebuilt and no path arg
+        # reads this tree from cwd, which avoids the CLI's quirk of appending
+        # the project root directory to a deploy path.
+        run: |
+          rm -rf .vercel/output
+          mkdir -p .vercel/output/static
+          cp -r dist/client/. .vercel/output/static/
+          printf '{"version":3}' > .vercel/output/config.json
+
       - name: Deploy
-        # dist/client holds the prerendered static site; deploy it directly
-        # with an absolute path so Vercel doesn't re-append the project's
-        # root directory to a relative path.
-        run: vercel deploy "$PWD/dist/client" --prod --token="$VERCEL_TOKEN"
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
