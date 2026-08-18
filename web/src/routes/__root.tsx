@@ -26,7 +26,7 @@ export const Route = createRootRoute({
         content:
           "A small terminal agent for local LLMs. One Go binary, no runtime, no server.",
       },
-      { property: "og:image", content: "/og-image.png" },
+      { property: "og:image", content: "https://raunen.vercel.app/og-image.png" },
       { property: "og:image:width", content: "3168" },
       { property: "og:image:height", content: "2050" },
       {
@@ -40,7 +40,7 @@ export const Route = createRootRoute({
         content:
           "A small terminal agent for local LLMs. One Go binary, no runtime, no server.",
       },
-      { name: "twitter:image", content: "/og-image.png" },
+      { name: "twitter:image", content: "https://raunen.vercel.app/og-image.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
