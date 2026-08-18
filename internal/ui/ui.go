@@ -305,12 +305,17 @@ func (m *Model) replay() {
 		case provider.User:
 			m.blank()
 			m.push(entry{rule: true})
-			m.push(entry{
-				kind:  kindUser,
-				first: barStyle.Render("▌ "),
-				cont:  barStyle.Render("▌ "),
-				text:  userStyle.Render(msg.Content),
-			})
+			// Split like openTurn does, so a resumed multi-line question looks
+			// the same as it did when it was asked.
+			for _, l := range strings.Split(msg.Content, "\n") {
+				m.push(entry{
+					kind:  kindUser,
+					first: barStyle.Render("▌ "),
+					cont:  barStyle.Render("▌ "),
+					text:  l,
+					style: &userStyle,
+				})
+			}
 		case provider.Assistant:
 			for _, tc := range msg.ToolCalls {
 				m.pushKind(entry{
@@ -366,6 +371,13 @@ type entry struct {
 	// the same kind sit together; a change of kind opens a blank line. See
 	// pushKind.
 	kind entryKind
+	// style, when set, is applied to each row after wrapping, and text is held
+	// unstyled. A style opened once at the front of the string does not survive
+	// wrapping: every row after the first starts with cont, which ends in a
+	// reset, so the colour would stop at the first wrap point. Anything with a
+	// single style throughout — a question, a quoted reply — sets this;
+	// mixed-style lines like a tool call style their own spans instead.
+	style *lipgloss.Style
 }
 
 // entryKind classifies a transcript line by its role in the conversation. It
@@ -413,6 +425,11 @@ func (e entry) rows(width int) []string {
 	parts := strings.Split(ansi.Wrap(e.text, w, ""), "\n")
 	out := make([]string, 0, len(parts))
 	for i, r := range parts {
+		// Style each row in its own right, so a message that wraps is coloured
+		// all the way down rather than only as far as the first break.
+		if e.style != nil {
+			r = e.style.Render(r)
+		}
 		if i == 0 {
 			out = append(out, e.first+r)
 		} else {
@@ -1098,15 +1115,22 @@ func (m *Model) openTurn(text, quote string) {
 		m.push(entry{
 			first: dimStyle.Render("│ "),
 			cont:  dimStyle.Render("│ "),
-			text:  quoteStyle.Render(l),
+			text:  l,
+			style: &quoteStyle,
 		})
 	}
-	m.push(entry{
-		kind:  kindUser,
-		first: barStyle.Render("▌ "),
-		cont:  barStyle.Render("▌ "),
-		text:  userStyle.Render(text),
-	})
+	// A question can be several lines, either because it was typed with
+	// shift+enter or because it is long enough to wrap. Either way it is one
+	// message: every line gets the bar and the colour.
+	for _, l := range strings.Split(text, "\n") {
+		m.push(entry{
+			kind:  kindUser,
+			first: barStyle.Render("▌ "),
+			cont:  barStyle.Render("▌ "),
+			text:  l,
+			style: &userStyle,
+		})
+	}
 	// The gap under the question is opened by whatever comes next, via
 	// pushKind — a blank line here would double it.
 }

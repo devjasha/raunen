@@ -99,3 +99,49 @@ func TestNoticeStaysTight(t *testing.T) {
 		t.Errorf("notice should not open blank lines, got %d rows:\n%q", len(got), got)
 	}
 }
+
+// TestMultilineUserStaysStyled guards a bug that is invisible without reading
+// escape codes: a question that wraps used to lose its colour after the first
+// row. The style was opened once at the front of the string, but every
+// continuation row starts with cont, which ends in a reset — so the bold blue
+// stopped at the first wrap point and the rest of the question rendered plain.
+func TestMultilineUserStaysStyled(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		text  string
+		width int
+		want  int // rows the question should occupy
+	}{
+		// Typed with shift+enter: the newlines are in the text itself.
+		{"hard newlines", "one\ntwo\nthree", 80, 3},
+		// One long line the terminal has to break: the rows come from wrapping.
+		{"soft wrap", strings.Repeat("word ", 40), 40, 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testModel(t)
+			m.width = tc.width
+			m.openTurn(tc.text, "")
+
+			var rows []string
+			for _, e := range m.entries {
+				if e.kind != kindUser {
+					continue
+				}
+				rows = append(rows, e.rows(m.innerWidth())...)
+			}
+			if len(rows) < tc.want {
+				t.Fatalf("got %d rows, want at least %d:\n%q", len(rows), tc.want, rows)
+			}
+			for i, r := range rows {
+				if strings.TrimSpace(ansi.Strip(r)) == "" {
+					continue
+				}
+				// The bar prefix is blue on its own; what matters is that the
+				// text after it is bold too, which is what userStyle adds.
+				if !strings.Contains(r, "\x1b[1;34m") {
+					t.Errorf("row %d is not styled as a user message: %q", i, r)
+				}
+			}
+		})
+	}
+}
