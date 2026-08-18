@@ -64,6 +64,19 @@ var (
 	barStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
 	taskStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 
+	// Working-out — tool calls, their results, delegated tasks — is rendered
+	// faint so it sits behind the conversation rather than beside it. A
+	// terminal has one font size, so weight is the only axis available: the
+	// question and the answer are what you read, and the steps between them are
+	// there to be glanced at.
+	//
+	// Faint is SGR 2. Terminals that do not implement it fall back to the plain
+	// colour, which is what these lines looked like before — so the worst case
+	// is the old appearance rather than an unreadable one.
+	workStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Faint(true)
+	workDim   = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Faint(true)
+	workErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Faint(true)
+
 	// The border tracks state: quiet when idle, warm while the model works.
 	borderIdle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	borderBusy = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
@@ -293,30 +306,33 @@ func (m *Model) replay() {
 			m.blank()
 			m.push(entry{rule: true})
 			m.push(entry{
+				kind:  kindUser,
 				first: barStyle.Render("▌ "),
 				cont:  barStyle.Render("▌ "),
 				text:  userStyle.Render(msg.Content),
 			})
-			m.blank()
 		case provider.Assistant:
 			for _, tc := range msg.ToolCalls {
-				m.push(entry{
-					first: "  " + toolStyle.Render("⏺ "),
+				m.pushKind(entry{
+					kind:  kindWork,
+					first: "  " + workStyle.Render("⏺ "),
 					cont:  "      ",
-					text:  toolStyle.Render(tc.Function.Name) + dimStyle.Render("  "+summarize(tc.Function.Arguments, 40)),
+					text:  workStyle.Render(tc.Function.Name) + workDim.Render("  "+summarize(tc.Function.Arguments, 40)),
 				})
 			}
 			if t := strings.TrimSpace(msg.Content); t != "" {
-				m.blank()
 				for _, l := range strings.Split(t, "\n") {
-					m.push(md.entry(l))
+					e := md.entry(l)
+					e.kind = kindReply
+					m.pushKind(e)
 				}
 			}
 		case provider.ToolRole:
-			m.push(entry{
-				first: "    " + dimStyle.Render("↳ "),
+			m.pushKind(entry{
+				kind:  kindWork,
+				first: "    " + workDim.Render("↳ "),
 				cont:  "      ",
-				text:  dimStyle.Render(resultSummary(msg.Content)),
+				text:  workDim.Render(resultSummary(msg.Content)),
 			})
 		}
 	}
@@ -346,6 +362,39 @@ type entry struct {
 	// the rule always spans the terminal.
 	rule  bool
 	stamp string
+	// kind is what this line is, which decides the spacing around it. Lines of
+	// the same kind sit together; a change of kind opens a blank line. See
+	// pushKind.
+	kind entryKind
+}
+
+// entryKind classifies a transcript line by its role in the conversation. It
+// exists so spacing is a property of the content rather than something every
+// call site has to remember to add — the old code called blank() by hand in a
+// dozen places, and the gaps disagreed with each other.
+type entryKind uint8
+
+const (
+	kindNone   entryKind = iota // blanks, rules, and anything unclassified
+	kindUser                    // what you typed
+	kindReply                   // the model's prose
+	kindWork                    // tool calls, results, delegated tasks
+	kindNotice                  // switches, warnings, level-ups, approvals
+)
+
+// spacedApart reports whether a blank line belongs between two kinds. Speech
+// and working-out are different registers and get air between them; consecutive
+// lines of the same kind do not, so ten reads in a row stay one block.
+func spacedApart(prev, next entryKind) bool {
+	if prev == kindNone || next == kindNone || prev == next {
+		return false
+	}
+	// A notice is a one-line aside — it is already set apart by its marker, and
+	// giving it a blank line on both sides costs two rows to say very little.
+	if next == kindNotice || prev == kindNotice {
+		return false
+	}
+	return true
 }
 
 // rows renders the entry at a given width.
@@ -443,6 +492,33 @@ func (m *Model) add(lines ...string) {
 	for _, l := range lines {
 		m.push(entry{text: l})
 	}
+}
+
+// pushKind appends an entry, opening a blank line first when the kind changes.
+// Everything that writes conversation goes through here, so the rhythm of the
+// transcript is decided in one place rather than at each call site.
+func (m *Model) pushKind(e entry) {
+	if spacedApart(m.lastKind(), e.kind) {
+		m.push(entry{})
+	}
+	m.push(e)
+}
+
+// lastKind is the kind of the last non-blank entry, so a blank line already
+// present does not read as "unclassified" and suppress the spacing rule.
+func (m Model) lastKind() entryKind {
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		e := m.entries[i]
+		if e.rule {
+			// A rule opens a turn and provides its own separation.
+			return kindNone
+		}
+		if e.text == "" && e.first == "" {
+			continue
+		}
+		return e.kind
+	}
+	return kindNone
 }
 
 // rewrap rebuilds the wrapped view of the transcript, after a resize or a trim.
@@ -1026,11 +1102,13 @@ func (m *Model) openTurn(text, quote string) {
 		})
 	}
 	m.push(entry{
+		kind:  kindUser,
 		first: barStyle.Render("▌ "),
 		cont:  barStyle.Render("▌ "),
 		text:  userStyle.Render(text),
 	})
-	m.blank()
+	// The gap under the question is opened by whatever comes next, via
+	// pushKind — a blank line here would double it.
 }
 
 // answer releases the blocked agent with the user's decision.
@@ -1125,10 +1203,11 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.flush()
 		m.inText = false
 		pad := strings.Repeat("  ", 1+e.Depth)
-		m.push(entry{
-			first: pad + toolStyle.Render("⏺ "),
+		m.pushKind(entry{
+			kind:  kindWork,
+			first: pad + workStyle.Render("⏺ "),
 			cont:  pad + "    ",
-			text:  toolStyle.Render(e.Name) + dimStyle.Render("  "+summarize(e.Args, max(20, m.innerWidth()-len(e.Name)-10))),
+			text:  workStyle.Render(e.Name) + workDim.Render("  "+summarize(e.Args, max(20, m.innerWidth()-len(e.Name)-10))),
 		})
 		return *m, next
 
@@ -1137,17 +1216,18 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		if e.Name == "task" && e.Depth == 0 {
 			return *m, next
 		}
-		text, style := resultSummary(e.Result), dimStyle
+		text, style := resultSummary(e.Result), workDim
 		if e.Err != nil {
-			text, style = e.Err.Error(), errStyle
+			text, style = e.Err.Error(), workErr
 		}
 		if e.Depth > 0 && m.sub != nil {
-			m.sub.add("  " + dimStyle.Render("↳ ") + style.Render(text))
+			m.sub.add("  " + workDim.Render("↳ ") + style.Render(text))
 			return *m, next
 		}
 		pad := strings.Repeat("  ", 2+e.Depth)
-		m.push(entry{
-			first: pad + dimStyle.Render("↳ "),
+		m.pushKind(entry{
+			kind:  kindWork,
+			first: pad + workDim.Render("↳ "),
 			cont:  pad + "  ",
 			text:  style.Render(text),
 		})
@@ -1160,10 +1240,11 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		m.inText = false
 		// The panel opens here and takes the sub-agent's steps from now on.
 		m.sub = &subView{desc: e.Description}
-		m.push(entry{
+		m.pushKind(entry{
+			kind:  kindWork,
 			first: "  " + taskStyle.Render("◆ "),
 			cont:  "    ",
-			text:  taskStyle.Render("task") + dimStyle.Render("  "+e.Description),
+			text:  taskStyle.Render("task") + workDim.Render("  "+e.Description),
 		})
 		return *m, next
 
@@ -1171,12 +1252,13 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		// The panel collapses, leaving one line in the transcript. What the
 		// sub-agent did was working-out, not conversation.
 		m.sub = nil
-		text, style := fmt.Sprintf("returned %d chars after %d steps", len(e.Summary), e.Steps), dimStyle
+		text, style := fmt.Sprintf("returned %d chars after %d steps", len(e.Summary), e.Steps), workDim
 		if e.Err != nil {
-			text, style = e.Err.Error(), errStyle
+			text, style = e.Err.Error(), workErr
 		}
-		m.push(entry{
-			first: "    " + dimStyle.Render("↳ "),
+		m.pushKind(entry{
+			kind:  kindWork,
+			first: "    " + workDim.Render("↳ "),
 			cont:  "      ",
 			text:  style.Render(text),
 		})
@@ -1187,7 +1269,8 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		// Context is the one thing every provider charges in, so it is what the
 		// companion grows on — whichever model happened to serve this request.
 		if before, after := m.comp.Feed(m.ref, int64(e.Total)); after > before {
-			m.push(entry{
+			m.pushKind(entry{
+				kind:  kindNotice,
 				first: "  " + levelStyle.Render("★ "),
 				cont:  "    ",
 				text: levelStyle.Render(fmt.Sprintf("level %d — %s", after, m.comp.Title())) +
@@ -1334,13 +1417,16 @@ func (m *Model) addText(lines []string) {
 	}
 	if !m.inText {
 		m.inText = true
-		m.blank()
 		// The reply is its own message, so a click anywhere in it quotes all
 		// of it rather than the one line under the pointer.
 		m.newBlock()
 	}
 	for _, l := range lines {
-		m.push(m.md.entry(l))
+		e := m.md.entry(l)
+		e.kind = kindReply
+		// Only the first line can need a gap opening before it; once inside a
+		// reply, consecutive lines are the same kind and stay together.
+		m.pushKind(e)
 	}
 }
 

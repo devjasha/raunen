@@ -181,9 +181,9 @@ func (c *Client) listTools(ctx context.Context) error {
 		desc := t.Description
 		// Capture per-tool state in values, so each closure sees its own.
 		c.tools = append(c.tools, tools.Tool{
-			Name:    name,
+			Name:        name,
 			Description: "[" + c.name + "] " + desc,
-			Params:  schema,
+			Params:      schema,
 			// MCP tools can do anything, so they are treated as mutating and are
 			// gated by plan/accept exactly like bash. A server that only reads is
 			// still asked permission before it acts, which is the safe default.
@@ -203,7 +203,7 @@ func (c *Client) callTool(ctx context.Context, name string, args json.RawMessage
 	// call already peeled the {"result": ...} envelope, so this decodes the
 	// result body directly: {content: [...], isError: bool}.
 	var res struct {
-		Error *rpcError `json:"error"`
+		Error   *rpcError `json:"error"`
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
