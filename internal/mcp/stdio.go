@@ -29,6 +29,10 @@ type stdioTransport struct {
 	// closed connection rather than a hang on the next call.
 	err  error
 	done chan struct{}
+
+	// notifyCB, when set, receives every JSON-RPC notification the server sends
+	// (a message with no id). Guarded by mu.
+	notifyCB func(method string, params json.RawMessage)
 }
 
 func newStdio(name string, s Server) (*stdioTransport, error) {
@@ -135,6 +139,15 @@ func (s *stdioTransport) close() error {
 	return nil
 }
 
+// OnNotification stores a callback for server notifications (messages with no
+// id). It is called from the read goroutine; install it before starting traffic
+// that may produce notifications.
+func (s *stdioTransport) OnNotification(cb func(method string, params json.RawMessage)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifyCB = cb
+}
+
 // read pumps responses (and notifications) from the server until it exits or is
 // killed. Each line is a JSON-RPC message; ones with an id are matched to a
 // waiting call, the rest (notifications) are dropped.
@@ -156,7 +169,20 @@ func (s *stdioTransport) read() {
 		}
 		var id int
 		if err := json.Unmarshal(msg.ID, &id); err != nil || msg.ID == nil {
-			// A notification, or a response with no id. Nothing to deliver.
+			// A notification, or a response with no id. Deliver it to the callback
+			// if one is registered; otherwise there is nothing else to do.
+			s.mu.Lock()
+			cb := s.notifyCB
+			s.mu.Unlock()
+			if cb != nil {
+				var n struct {
+					Method string          `json:"method"`
+					Params json.RawMessage `json:"params"`
+				}
+				if err := json.Unmarshal([]byte(line), &n); err == nil {
+					cb(n.Method, n.Params)
+				}
+			}
 			continue
 		}
 		s.mu.Lock()

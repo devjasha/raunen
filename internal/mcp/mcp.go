@@ -10,6 +10,15 @@
 //   - "http": a remote server over Streamable HTTP — POST a JSON-RPC body to the
 //     URL, accept either application/json or text/event-stream back, and carry
 //     the Mcp-Session-Id header returned by initialize onto later requests.
+//   - "sse": the legacy Streamable SSE pattern — a long-lived GET opens the
+//     server→client event stream (Accept: text/event-stream) and each JSON-RPC
+//     call is a POST to the same URL; the server may answer the POST in JSON or
+//     with its own SSE frames, or defer the result onto the GET stream.
+//
+// Both remote transports carry the Mcp-Session-Id returned during initialize so
+// the server keeps the same session. A server that advertises
+// Tools.ListChanged sends notifications/tools/list_changed when its toolset
+// changes, and the Client re-lists and reports the new set through OnToolsChanged.
 //
 // Only the parts raunen needs are implemented — initialize, tools/list,
 // tools/call — so a server that offers resources or prompts is fine, those are
@@ -44,7 +53,8 @@ type Server struct {
 	// needs. Inherited from the parent, so PATH carries over. Ignored for http.
 	Env map[string]string `json:"env,omitempty"`
 	// Type selects the transport: "" or "stdio" for a subprocess, "http" for a
-	// remote Streamable-HTTP server. Empty means stdio, matching older configs.
+	// remote Streamable-HTTP server, or "sse" for the legacy GET-stream / POST
+	// pattern. Empty means stdio, matching older configs.
 	Type string `json:"type,omitempty"`
 	// URL is the Streamable-HTTP endpoint, used when Type is "http".
 	URL string `json:"url,omitempty"`
@@ -66,6 +76,10 @@ type transport interface {
 	request(ctx context.Context, method string, params any) (json.RawMessage, error)
 	// notify sends a notification (no id, no reply awaited).
 	notify(ctx context.Context, method string, params any) error
+	// OnNotification registers a callback invoked for every JSON-RPC notification
+	// the server sends (a message with no id). It is safe to call once before any
+	// request; the callback may be invoked from a transport read goroutine.
+	OnNotification(cb func(method string, params json.RawMessage))
 	// close stops the transport and any backend it owns.
 	close() error
 }
@@ -96,6 +110,11 @@ type Client struct {
 	serverProtocolVersion string
 	// caps is the server's advertised capabilities from the initialize result.
 	caps ServerCapabilities
+
+	// onToolsChanged, when set, is invoked after a tools/list_changed notification
+	// triggers a successful refresh of the toolset. It carries the server name and
+	// the refreshed tools so the registry can swap them in live.
+	onToolsChanged func(name string, tools []tools.Tool)
 }
 
 // Start launches the server with the transport its type asks for and performs
@@ -115,6 +134,11 @@ func Start(ctx context.Context, name string, s Server) (*Client, error) {
 			return nil, fmt.Errorf("mcp %q: http type requires a url", name)
 		}
 		t, err = newHTTP(name, s)
+	case "sse":
+		if s.URL == "" {
+			return nil, fmt.Errorf("mcp %q: sse type requires a url", name)
+		}
+		t, err = newSSE(name, s)
 	default:
 		return nil, fmt.Errorf("mcp %q: unknown type %q", name, s.Type)
 	}
@@ -130,6 +154,16 @@ func Start(ctx context.Context, name string, s Server) (*Client, error) {
 		c.Close()
 		return nil, fmt.Errorf("mcp %q: %w", name, err)
 	}
+	// Register a live notification handler so a server advertising ListChanged can
+	// refresh our toolset without polling. The callback fires from the transport's
+	// read goroutine; listTools re-drives the full handshake half of the protocol.
+	c.t.OnNotification(func(method string, params json.RawMessage) {
+		if method == "notifications/tools/list_changed" {
+			if err := c.listTools(ctx); err == nil && c.onToolsChanged != nil {
+				c.onToolsChanged(c.name, c.Tools())
+			}
+		}
+	})
 	return c, nil
 }
 
@@ -138,6 +172,13 @@ func (c *Client) Tools() []tools.Tool { return c.tools }
 
 // Name reports the server's configured name.
 func (c *Client) Name() string { return c.name }
+
+// SetOnToolsChanged installs a callback that fires after a tools/list_changed
+// notification triggers a live refresh of the server's toolset. It is a no-op
+// until the transport delivers such a notification.
+func (c *Client) SetOnToolsChanged(cb func(name string, tools []tools.Tool)) {
+	c.onToolsChanged = cb
+}
 
 // ServerProtocolVersion reports the protocol version the server negotiated during
 // initialize. Useful for diagnostics and for follow-up transports that must

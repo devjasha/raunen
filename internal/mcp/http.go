@@ -28,6 +28,11 @@ type httpTransport struct {
 	mu        sync.Mutex
 	nextID    int
 	sessionID string
+
+	// notifyCB, when set, receives every JSON-RPC notification the server sends
+	// (a message with no id). Guarded by mu, but invoked outside mu since the
+	// callback may call back into the transport.
+	notifyCB func(method string, params json.RawMessage)
 }
 
 func newHTTP(name string, s Server) (*httpTransport, error) {
@@ -55,6 +60,15 @@ func (h *httpTransport) notify(ctx context.Context, method string, params any) e
 	// omitempty, so the server reads it as a notification and answers 202.
 	_, err := h.do(ctx, method, 0, params)
 	return err
+}
+
+// OnNotification stores a callback for server notifications (messages with no
+// id). For Streamable HTTP, notifications may arrive as SSE frames in a response
+// that has no matching pending request id; do() delivers such frames here.
+func (h *httpTransport) OnNotification(cb func(method string, params json.RawMessage)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.notifyCB = cb
 }
 
 // do sends one POST and returns the result body. The caller holds mu, so it is
@@ -113,7 +127,11 @@ func (h *httpTransport) do(ctx context.Context, method string, id int, params an
 	ctype = strings.TrimSpace(ctype)
 	var msg json.RawMessage
 	if ctype == "text/event-stream" {
-		msg, err = parseSSE(raw, id)
+		// A streamable HTTP response may interleave notifications (no id) with the
+		// result for our request id. Deliver any notification frames to the
+		// callback and use the frame matching our id (or the last one) as the
+		// result.
+		msg, err = h.handleSSE(raw, id)
 		if err != nil {
 			return nil, err
 		}
@@ -134,13 +152,49 @@ func (h *httpTransport) do(ctx context.Context, method string, id int, params an
 	return env.Result, nil
 }
 
+// handleSSE parses an SSE body, forwarding any id-less notification frames to
+// notifyCB, and returns the frame matching wantID (falling back to the last
+// frame) for use as the request's result. The caller holds mu.
+func (h *httpTransport) handleSSE(raw []byte, wantID int) (json.RawMessage, error) {
+	frames := splitSSE(raw)
+	if len(frames) == 0 {
+		return nil, fmt.Errorf("mcp %q: sse stream had no data frames", h.name)
+	}
+	var result json.RawMessage
+	for _, f := range frames {
+		var hdr struct {
+			ID int `json:"id"`
+		}
+		if json.Unmarshal(f, &hdr) != nil || hdr.ID == 0 {
+			// A notification (no id) — deliver it if a callback is set.
+			if h.notifyCB != nil {
+				var n struct {
+					Method string          `json:"method"`
+					Params json.RawMessage `json:"params"`
+				}
+				if err := json.Unmarshal(f, &n); err == nil && n.Method != "" {
+					h.notifyCB(n.Method, n.Params)
+				}
+			}
+			continue
+		}
+		if hdr.ID == wantID {
+			result = f
+		}
+	}
+	if result == nil {
+		result = frames[len(frames)-1]
+	}
+	return result, nil
+}
+
 func (h *httpTransport) close() error { return nil }
 
-// parseSSE reads an SSE stream and returns the JSON-RPC message whose id matches
-// wantID. A server may interleave notifications with the result, so we look for
-// the matching id rather than assuming the first frame is ours. If nothing
-// matches, the last frame wins — better a stale reply than none.
-func parseSSE(raw []byte, wantID int) (json.RawMessage, error) {
+// splitSSE reads an SSE byte stream and returns the JSON payloads carried in its
+// "data:" frames, in order. Non-data lines (event:, id:, blank separators, and
+// server pings) are ignored, as is the case on a long-lived stream where the
+// server may prefix lines with ":" as a comment.
+func splitSSE(raw []byte) []json.RawMessage {
 	var frames []json.RawMessage
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
@@ -155,6 +209,15 @@ func parseSSE(raw []byte, wantID int) (json.RawMessage, error) {
 		}
 		frames = append(frames, json.RawMessage(data))
 	}
+	return frames
+}
+
+// parseSSE reads an SSE stream and returns the JSON-RPC message whose id matches
+// wantID. A server may interleave notifications with the result, so we look for
+// the matching id rather than assuming the first frame is ours. If nothing
+// matches, the last frame wins — better a stale reply than none.
+func parseSSE(raw []byte, wantID int) (json.RawMessage, error) {
+	frames := splitSSE(raw)
 	if len(frames) == 0 {
 		return nil, fmt.Errorf("mcp: sse stream had no data frames")
 	}
