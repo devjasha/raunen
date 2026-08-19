@@ -113,6 +113,48 @@ function Subagents() {
         keeps its height whether one is running or three.
       </p>
 
+      <h2>Talking while they work</h2>
+      <p>
+        Delegating long work is only worth it if you can carry on. Press enter
+        while an answer is still arriving and the new question is answered beside
+        it rather than queued behind it.
+      </p>
+      <p>
+        It cannot join the turn already running — that one is blocked on a tool
+        result it asked for — so it gets a fork of the conversation: the same
+        tools, everything said up to that moment, and its own transcript to answer
+        into. The exchange is folded back when it finishes, so the conversation
+        ends up holding every turn even though they were answered side by side.
+      </p>
+      <p>
+        Two answers arriving into one transcript have to be readable apart, so
+        once a second turn starts every line carries a gutter mark naming the turn
+        it belongs to — by shape as well as colour, so a screenshot in black and
+        white still reads.
+      </p>
+      <Term title="two turns at once">
+        <D>{"────────────────────────────────────────────── 14:02\n"}</D>
+        <G>{"┃ "}</G>
+        <U>{"▌ summarise every file in internal/"}</U>
+        {"\n\n"}
+        <D>{"────────────────────────────────────────────── 14:02\n"}</D>
+        <T>{"┆ "}</T>
+        <U>{"▌ meanwhile, what does vcs.Branch do?"}</U>
+        {"\n\n"}
+        <T>{"┆ "}</T>
+        {"It shells out to git rev-parse.\n"}
+        <G>{"┃ "}</G>
+        <D>{"  ⏺ read  internal/ui/markdown.go"}</D>
+      </Term>
+      <p>
+        <code>esc</code> cancels the newest turn, so a question asked by mistake
+        can be taken back without losing the long piece of work still running
+        underneath it. <code>ctrl+c</code> stops everything. The commands that
+        rewrite the conversation — <code>/compact</code>, <code>/clear</code>,{" "}
+        <code>/resume</code> — wait for it to be quiet, since there would be
+        nothing coherent to rewrite otherwise.
+      </p>
+
       <h2>Bounds</h2>
       <ul>
         <li>

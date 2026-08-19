@@ -187,6 +187,9 @@ type Agent struct {
 	// with sub-agents by pointer, like health: the user has one keyboard, and
 	// two questions at once would have an answer land on the wrong one.
 	approving *sync.Mutex
+	// parent is the agent this one was forked from to answer a turn beside it,
+	// nil for the conversation itself. Merge hands the finished exchange back.
+	parent *Agent
 }
 
 func New(c *provider.Client, r *tools.Registry, system string) *Agent {
@@ -421,6 +424,61 @@ func (a *Agent) approve(ctx context.Context, tc provider.ToolCall, out chan<- Ev
 
 // Messages exposes the transcript for persistence.
 func (a *Agent) Messages() []provider.Message { return a.messages }
+
+// Fork returns an agent that answers one turn alongside this one.
+//
+// A second question asked while the first is still running cannot go to the
+// same agent: a turn appends to a.messages as it goes and blocks on tool
+// results, so two of them on one agent would interleave their tool calls into
+// each other's transcripts and race on the slice itself.
+//
+// The fork takes a snapshot of the conversation so far — it can see everything
+// said up to the moment it was asked — and answers into its own copy. Merge
+// folds what it produced back in when it is done.
+//
+// Shared by pointer, not copied: health, so what one turn learns about a dead
+// endpoint spares the other from finding out again; and the approval lock, so
+// two overlapping turns reaching a mutating tool ask the one keyboard one
+// question at a time rather than both at once.
+func (a *Agent) Fork() *Agent {
+	return &Agent{
+		client:        a.client,
+		tools:         a.tools,
+		system:        a.system,
+		mode:          a.mode,
+		contextTokens: a.contextTokens,
+		ref:           a.ref,
+		fallbacks:     a.fallbacks,
+		autoSwitch:    a.autoSwitch,
+		health:        a.health,
+		approving:     a.approving,
+		parent:        a,
+		messages:      append([]provider.Message(nil), a.messages...),
+	}
+}
+
+// Merge folds a finished fork's exchange back into the conversation it came
+// from, so the transcript — and the session saved from it — ends up holding
+// every turn even though they were answered side by side.
+//
+// The exchange is taken from the fork's last user message rather than from a
+// remembered offset, because the fork may have trimmed or compacted its copy
+// while it worked. The question being answered is the one thing neither of
+// those ever drops, which makes it the reliable place to cut.
+//
+// Must not be called until the fork's run has finished; the caller knows that
+// because the event channel has closed.
+func (a *Agent) Merge() {
+	if a.parent == nil {
+		return
+	}
+	i := lastUser(a.messages)
+	if i < 1 {
+		return
+	}
+	a.parent.messages = append(a.parent.messages, a.messages[i:]...)
+	a.parent = nil
+}
 
 // Restore replaces the transcript with a saved one, keeping the current system
 // prompt rather than the one the session was recorded with — the mode and

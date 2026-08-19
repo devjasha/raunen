@@ -18,8 +18,12 @@ import (
 type subView struct {
 	// id is the agent's task ID, which is how events find their way here when
 	// several sub-agents are running at once.
-	id    string
-	desc  string
+	id   string
+	desc string
+	// owner is the turn that delegated this task. Several turns can be running
+	// at once, and a sub-agent must not outlive the one that spawned it — nor
+	// be closed when a different one ends.
+	owner *turn
 	lines []string
 	// steps counts tool calls, so the hint can say how far along it is without
 	// the panel being open.

@@ -6,3 +6,9 @@
 
 # session store, if anyone points XDG at the checkout
 /sessions/
+
+# companion written by tests that point XDG at the checkout
+/.raunen-test/
+
+# Vercel build output, produced by the deploy rather than committed
+/web/.vercel/

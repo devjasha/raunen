@@ -190,7 +190,7 @@ func TestBranchAlreadyOnIt(t *testing.T) {
 func TestBranchRefusedWhileBusy(t *testing.T) {
 	m, dir := repoModel(t)
 	m.branch = vcs.Branch(dir)
-	m.busy = true
+	begin(&m)
 
 	ret, _ := m.command("/branch -b spike")
 	mm := ret.(Model)

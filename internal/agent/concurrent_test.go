@@ -298,3 +298,177 @@ func TestTaskEventsCarryTheirID(t *testing.T) {
 		}
 	}
 }
+
+// A turn asked while another is running gets a fork. It has to see everything
+// said up to that moment — it is joining a conversation, not starting one.
+func TestForkSeesTheConversationSoFar(t *testing.T) {
+	a := dispatchAgent(t, &tools.Registry{})
+	a.Note("the parser is in parse.go")
+
+	f := a.Fork()
+	if len(f.Messages()) != len(a.Messages()) {
+		t.Fatalf("the fork sees %d messages, the conversation has %d",
+			len(f.Messages()), len(a.Messages()))
+	}
+	if f.Messages()[len(f.Messages())-1].Content != "the parser is in parse.go" {
+		t.Error("the fork did not inherit what had been said")
+	}
+}
+
+// The two must not share the message slice, or a tool result appended by one
+// turn lands in the middle of the other's exchange.
+func TestForkOwnsItsTranscript(t *testing.T) {
+	a := dispatchAgent(t, &tools.Registry{})
+	a.Note("first")
+	before := len(a.Messages())
+
+	f := a.Fork()
+	f.Note("only the fork said this")
+
+	if len(a.Messages()) != before {
+		t.Errorf("the conversation grew to %d messages when the fork wrote to its own copy", len(a.Messages()))
+	}
+}
+
+// Health and the approval lock are shared on purpose: what one turn learns
+// about a dead endpoint should spare the other from finding out again, and the
+// user has one keyboard.
+func TestForkSharesHealthAndApprovals(t *testing.T) {
+	a := dispatchAgent(t, &tools.Registry{})
+	f := a.Fork()
+
+	if f.health != a.health {
+		t.Error("the fork has its own health, so it will walk into endpoints the caller already found dead")
+	}
+	if f.approving != a.approving {
+		t.Error("the fork has its own approval lock, so two questions could reach one keyboard at once")
+	}
+}
+
+// What a fork worked out has to reach the conversation, or the answer is on
+// screen but missing from the transcript and from the session on disk.
+func TestMergeFoldsTheExchangeBack(t *testing.T) {
+	a := dispatchAgent(t, &tools.Registry{})
+	a.Note("earlier discussion")
+	before := len(a.Messages())
+
+	f := a.Fork()
+	f.messages = append(f.messages,
+		provider.Message{Role: provider.User, Content: "the question"},
+		provider.Message{Role: provider.Assistant, Content: "the answer"})
+	f.Merge()
+
+	got := a.Messages()
+	if len(got) != before+2 {
+		t.Fatalf("the conversation has %d messages after merging, want %d", len(got), before+2)
+	}
+	if got[len(got)-2].Content != "the question" || got[len(got)-1].Content != "the answer" {
+		t.Errorf("the merged exchange is wrong: %q, %q",
+			got[len(got)-2].Content, got[len(got)-1].Content)
+	}
+}
+
+// A fork may trim or compact its own copy while it works. The question being
+// answered is the one thing neither ever drops, which is why the exchange is
+// cut from there rather than from a remembered offset.
+func TestMergeSurvivesTheForkTrimmingItself(t *testing.T) {
+	a := dispatchAgent(t, &tools.Registry{})
+	for i := 0; i < 5; i++ {
+		a.Note(fmt.Sprintf("earlier %d", i))
+	}
+	before := len(a.Messages())
+
+	f := a.Fork()
+	f.messages = append(f.messages, provider.Message{Role: provider.User, Content: "the question"})
+	// Everything before the question goes, as trimming would take it.
+	f.messages = append(f.messages[:1], f.messages[len(f.messages)-1:]...)
+	f.messages = append(f.messages, provider.Message{Role: provider.Assistant, Content: "the answer"})
+	f.Merge()
+
+	got := a.Messages()
+	if len(got) != before+2 {
+		t.Fatalf("the conversation has %d messages, want %d — trimming lost the exchange", len(got), before+2)
+	}
+	if got[before].Content != "the question" {
+		t.Errorf("the merge cut in the wrong place: %q", got[before].Content)
+	}
+}
+
+// Merging twice would say everything the fork did a second time.
+func TestMergeHappensOnce(t *testing.T) {
+	a := dispatchAgent(t, &tools.Registry{})
+	f := a.Fork()
+	f.messages = append(f.messages, provider.Message{Role: provider.User, Content: "q"})
+	f.Merge()
+	after := len(a.Messages())
+	f.Merge()
+
+	if len(a.Messages()) != after {
+		t.Error("merging a second time duplicated the exchange")
+	}
+}
+
+// The conversation itself is not a fork, so merging it is a no-op rather than
+// a doubling.
+func TestMergingTheConversationDoesNothing(t *testing.T) {
+	a := dispatchAgent(t, &tools.Registry{})
+	a.Note("something")
+	before := len(a.Messages())
+	a.Merge()
+	if len(a.Messages()) != before {
+		t.Error("merging the conversation into itself changed it")
+	}
+}
+
+// Two turns answered side by side must not touch each other's state. This is
+// the failure the fork exists to prevent, and only the race detector sees it:
+// without it, two turns on one agent append to the same slice from two
+// goroutines and the corruption shows up much later as a rejected request.
+//
+// Run with -race for this to mean anything.
+func TestConcurrentTurnsDoNotRace(t *testing.T) {
+	reg := &tools.Registry{}
+	reg.Add(tools.Tool{
+		Name:   "look",
+		Params: map[string]any{"type": "object"},
+		Run: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			time.Sleep(5 * time.Millisecond)
+			return "looked", nil
+		},
+	})
+	a := dispatchAgent(t, reg)
+	a.Note("shared history")
+
+	const n = 4
+	forks := make([]*Agent, n)
+	var wg sync.WaitGroup
+	for i := range forks {
+		f := a.Fork()
+		forks[i] = f
+		wg.Add(1)
+		go func(f *Agent, i int) {
+			defer wg.Done()
+			out := make(chan Event, 64)
+			collect := drainAsync(out)
+			// No model behind it, so the turn fails at the first request —
+			// which is enough: the transcript is appended to either way, and
+			// that is what the two would race on.
+			f.messages = append(f.messages,
+				provider.Message{Role: provider.User, Content: fmt.Sprintf("question %d", i)})
+			f.dispatchAll(context.Background(), []provider.ToolCall{call("1", "look", `{}`)}, out)
+			collect()
+		}(f, i)
+	}
+	wg.Wait()
+
+	// Merging is sequential — the frontend does it as each turn's channel
+	// closes — and every exchange has to arrive.
+	before := len(a.Messages())
+	for _, f := range forks {
+		f.Merge()
+	}
+	if got := len(a.Messages()); got != before+n {
+		t.Errorf("the conversation has %d messages after merging %d turns, want %d",
+			got, n, before+n)
+	}
+}

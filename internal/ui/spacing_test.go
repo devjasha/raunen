@@ -28,6 +28,18 @@ func testModel(t *testing.T) Model {
 	return m
 }
 
+// begin opens a turn on a model without a model behind it, so a test can drive
+// events at it the way the agent would. The turn is registered as live, which
+// is what onEvent checks before writing anything.
+func begin(m *Model) *turn {
+	m.turnSeq++
+	// Forked like a real turn, so it does not read as a compaction — which is
+	// what a turn carrying no agent means.
+	t := &turn{seq: m.turnSeq, ag: m.ag.Fork(), cancel: func() {}, events: make(chan agent.Event, 1)}
+	m.turns = append(m.turns, t)
+	return t
+}
+
 // plain renders the transcript without styling, which is what the spacing rules
 // are about: a blank line is a blank line whether or not the terminal drew it
 // faint.
@@ -78,7 +90,7 @@ func TestKindSpacing(t *testing.T) {
 // leaves two rows of nothing between every message.
 func TestNoDoubleBlank(t *testing.T) {
 	m := testModel(t)
-	m.openTurn("question", "")
+	m.openTurn(&turn{}, "question", "")
 	m.pushKind(entry{kind: kindWork, text: "⏺ read main.go"})
 	m.pushKind(entry{kind: kindReply, text: "it parses flags"})
 
@@ -124,7 +136,7 @@ func TestMultilineUserStaysStyled(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := testModel(t)
 			m.width = tc.width
-			m.openTurn(tc.text, "")
+			m.openTurn(&turn{}, tc.text, "")
 
 			var rows []string
 			for _, e := range m.entries {

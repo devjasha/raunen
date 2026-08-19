@@ -47,7 +47,9 @@ var commands = []command{
 // keyHelp is the other half of /help: what the keyboard does, which has no
 // completion because there is nothing to type.
 var keyHelp = []string{
-	"esc                      cancel the running turn",
+	"enter                    ask — even while an answer is still arriving",
+	"esc                      cancel the newest turn",
+	"ctrl+c                   cancel everything running",
 	"pgup/pgdn, shift+↑/↓     scroll the transcript",
 	"shift+enter              newline without sending",
 	"tab                      cycle auto / accept edits / plan",

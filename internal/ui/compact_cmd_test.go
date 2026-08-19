@@ -11,7 +11,8 @@ import (
 // compaction that says nothing looks like a command that did nothing.
 func TestCompactCommandReportsWhatItWon(t *testing.T) {
 	m := testModel(t)
-	m.onEvent(agent.Compacted{
+	tn := begin(&m)
+	m.onEvent(tn, agent.Compacted{
 		Replaced: 46, Kept: 8,
 		Before: 82_000, After: 19_000,
 		Summary: "Goal — fix the parser.",
@@ -28,7 +29,7 @@ func TestCompactCommandReportsWhatItWon(t *testing.T) {
 	if m.ctxTokens != 19_000 {
 		t.Errorf("context still reads %d tokens after compaction, want 19000", m.ctxTokens)
 	}
-	if m.warnedFull {
+	if tn.warnedFull {
 		t.Error("the full-context warning was not rearmed, so it will not fire again")
 	}
 }
@@ -37,7 +38,7 @@ func TestCompactCommandReportsWhatItWon(t *testing.T) {
 // for, and one that happened to them mid-turn.
 func TestAutoCompactSaysWhyItHappened(t *testing.T) {
 	m := testModel(t)
-	m.onEvent(agent.Compacted{Replaced: 20, Kept: 4, Before: 1000, After: 400, Auto: true})
+	m.onEvent(begin(&m), agent.Compacted{Replaced: 20, Kept: 4, Before: 1000, After: 400, Auto: true})
 
 	if out := strings.Join(rowsOf(m), "\n"); !strings.Contains(out, "context was full") {
 		t.Errorf("an automatic compaction did not say what caused it:\n%s", out)
@@ -48,10 +49,10 @@ func TestAutoCompactSaysWhyItHappened(t *testing.T) {
 // list while the agent is streaming against it.
 func TestCompactRefusesMidTurn(t *testing.T) {
 	m := testModel(t)
-	m.busy = true
+	running := begin(&m)
 	m.command("/compact")
 
-	if !m.busy {
+	if len(m.turns) != 1 || m.turns[0] != running {
 		t.Error("/compact took over a turn that was still running")
 	}
 	if out := strings.Join(rowsOf(m), "\n"); !strings.Contains(out, "wait") {
@@ -63,7 +64,7 @@ func TestCompactRefusesMidTurn(t *testing.T) {
 // exists for: the turn carries on and trims instead.
 func TestCompactFailureDoesNotReadAsAFailedTurn(t *testing.T) {
 	m := testModel(t)
-	m.onEvent(agent.CompactFailed{Err: errStub("could not summarise the conversation: endpoint refused")})
+	m.onEvent(begin(&m), agent.CompactFailed{Err: errStub("could not summarise the conversation: endpoint refused")})
 
 	out := strings.Join(rowsOf(m), "\n")
 	if !strings.Contains(out, "endpoint refused") {

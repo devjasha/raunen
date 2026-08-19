@@ -92,7 +92,7 @@ func noticeFor(t *testing.T, from, to int64) string {
 	t.Helper()
 	m := testModel(t)
 	m.comp.Tokens = from
-	m.onEvent(agent.Usage{Usage: provider.Usage{Total: int(to - from)}})
+	m.onEvent(begin(&m), agent.Usage{Usage: provider.Usage{Total: int(to - from)}})
 	if m.comp.Level() != levelAt(to) {
 		t.Fatalf("companion ended at level %d, want %d", m.comp.Level(), levelAt(to))
 	}

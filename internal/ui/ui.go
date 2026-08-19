@@ -134,9 +134,83 @@ const maxLines = 10000
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-type eventMsg struct{ ev agent.Event }
-type streamDoneMsg struct{}
+type eventMsg struct {
+	turn *turn
+	ev   agent.Event
+}
+type streamDoneMsg struct{ turn *turn }
 type tickMsg time.Time
+
+// turn is one question being answered. There can be several at once: asking
+// something while the model is working starts another rather than waiting for
+// the first, which is the whole point of being able to delegate long work.
+//
+// Everything here is state that belongs to one answer and would be corrupted by
+// sharing. Two replies streaming at the same time each need their own
+// half-received line and their own fenced-code-block state, or one turn's
+// backtick would put the other turn's prose inside a code block.
+type turn struct {
+	// seq numbers turns for the life of the session, so a sub-agent panel can
+	// be attributed to the turn that opened it.
+	seq int
+	// ag answers this turn. It is a fork of the conversation for every turn
+	// after the first in flight, and its exchange is merged back when it ends.
+	// Nil for /compact, which drives this machinery without being a turn.
+	ag     *agent.Agent
+	events chan agent.Event
+	cancel context.CancelFunc
+
+	// pending is assistant text received but not yet turned into whole lines.
+	pending string
+	// think is the tail of a reasoning model's thinking, shown as a single
+	// status row. It never enters the transcript.
+	think string
+	// md carries fenced-code-block state across streamed lines.
+	md markdown
+	// inText records whether the last thing this turn wrote was prose, so a
+	// blank line can separate it from the tool calls around it.
+	inText bool
+	// warnedFull records that the context-pressure warning has been shown for
+	// this turn, so it is not repeated on every request within it.
+	warnedFull bool
+	// rejected records that the chosen model refused outright, so a switch away
+	// from it can be made permanent rather than repeated tomorrow.
+	rejected bool
+	// adopt is a model to remember as the default, but only after it answers.
+	adopt string
+	// tag is the gutter mark put in front of everything this turn writes, so
+	// two answers arriving into one transcript can be told apart. Empty while a
+	// turn has the conversation to itself, which is the usual case and wants no
+	// decoration; set on every live turn the moment a second one starts, and
+	// never cleared afterwards — the marks begin exactly where the overlap
+	// does, which is where the reader starts needing them.
+	tag string
+	// block is the message id this turn's reply is being written under, held so
+	// the reply stays one clickable message even when another turn's output
+	// lands in the middle of it.
+	block int
+}
+
+// turnMarks distinguish concurrent turns. Shape as well as colour, because
+// colour alone is not enough: a terminal with a narrow palette, a screenshot in
+// black and white, or a reader who cannot tell 5 from 6 would be left with two
+// identical bars down the screen and no way to read the transcript apart.
+//
+// The colours are ANSI indices, like everything else here, so they follow the
+// terminal's own palette. Blue is left out — the question is already blue, and
+// the mark has to be distinguishable from the bar it sits next to.
+var turnMarks = []struct{ glyph, color string }{
+	{"┃", "5"},
+	{"┆", "6"},
+	{"╏", "2"},
+	{"┇", "3"},
+}
+
+// turnMark builds a turn's gutter, given its number.
+func turnMark(seq int) string {
+	m := turnMarks[(seq-1)%len(turnMarks)]
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.color)).Render(m.glyph)
+}
 
 type Model struct {
 	cfg   *config.Config
@@ -144,9 +218,11 @@ type Model struct {
 	root  string
 	input textarea.Model
 
-	events chan agent.Event
-	cancel context.CancelFunc
-	busy   bool
+	// turns are the questions being answered right now, oldest first. Usually
+	// none or one; more when the user asked something else without waiting.
+	turns []*turn
+	// turnSeq numbers them.
+	turnSeq int
 
 	// entries is the transcript as logical lines, before wrapping. It is the
 	// source of truth; display holds the same content wrapped to width.
@@ -166,26 +242,11 @@ type Model struct {
 	// replyTo is the message being replied to, quoted into the next send.
 	replyTo string
 
-	// pending is assistant text received but not yet turned into whole lines.
-	pending string
-	// think is the tail of a reasoning model's thinking, shown as a single
-	// status row. It never enters the transcript.
-	think string
-	// md carries fenced-code-block state across streamed lines.
-	md markdown
-	// inText records whether the last thing written was assistant prose, so a
-	// blank line can separate it from the tool calls around it.
-	inText bool
-	frame  int
+	frame int
 
 	// ref is the active "provider/model" reference, kept so the context limit
 	// can be looked up again after /model.
 	ref string
-	// rejected records that the chosen model refused outright this turn, so a
-	// switch away from it can be made permanent rather than repeated tomorrow.
-	rejected bool
-	// adopt is a model to remember as the default, but only after it answers.
-	adopt string
 	// chosen is the model the user picked, which is not always the active one:
 	// escalation moves ref to a roomier model for a turn, and that is a
 	// temporary measure rather than a decision worth remembering.
@@ -194,9 +255,6 @@ type Model struct {
 	branch string
 	// ctxTokens is the conversation size reported by the last request.
 	ctxTokens int
-	// warnedFull records that the context-pressure warning has been shown for
-	// the current turn, so it is not repeated on every request within it.
-	warnedFull bool
 	// sess is the conversation on disk, written after each turn.
 	sess *session.Session
 	// comp is the mascot's progress, which spans every session and provider
@@ -211,10 +269,6 @@ type Model struct {
 	// panel is closed. Kept as an id rather than an index so a sibling
 	// finishing does not shift what is being watched.
 	watching string
-	// queued is a message typed while the agent was busy. The model cannot take
-	// it mid-turn — it is blocked on a tool result it asked for — so it is held
-	// and sent the moment the turn ends.
-	queued string
 	// keyAsk is the API key prompt, open only while asking.
 	keyAsk *keyPrompt
 	// pick is the model chooser overlay, open only while choosing.
@@ -375,6 +429,10 @@ type entry struct {
 	// block groups the lines that belong to one message, so clicking any line of
 	// a reply selects the reply rather than the line.
 	block int
+	// turn is which concurrent turn wrote this line, zero for anything the UI
+	// wrote itself. It is what lets a gap be opened when the transcript changes
+	// speaker mid-answer.
+	turn int
 	// rule makes this a turn separator drawn to the full width, optionally
 	// labelled with stamp. It is re-rendered on resize rather than stored, so
 	// the rule always spans the terminal.
@@ -521,6 +579,76 @@ func (m Model) blockText(block int) string {
 	return strings.Join(lines, "\n")
 }
 
+// busy reports whether anything is being answered. It is a question about the
+// whole screen — the spinner, the border, whether ctrl+c means "stop" or
+// "quit" — so it asks about every turn rather than a particular one.
+func (m Model) busy() bool { return len(m.turns) > 0 }
+
+// live finds a turn by identity, nil once it has ended. Events carry the turn
+// they came from rather than an index, so a turn finishing cannot misroute the
+// events of one still running.
+func (m Model) live(t *turn) *turn {
+	for _, x := range m.turns {
+		if x == t {
+			return x
+		}
+	}
+	return nil
+}
+
+// compacting reports whether the conversation is being rewritten. A compaction
+// is the one piece of work that runs against m.ag itself — summarising the
+// transcript is precisely a rewrite of it — so nothing may fork from it
+// meanwhile. It is marked by carrying no agent of its own.
+func (m Model) compacting() bool {
+	for _, t := range m.turns {
+		if t.ag == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// stop cancels one turn. The turn is left in flight: the agent notices the
+// cancellation, reports it, and closes its channel, and the turn is cleared
+// where every other turn is — so a cancelled turn still merges what it managed
+// to do rather than losing it.
+func (m *Model) stop(t *turn) {
+	if t != nil {
+		t.cancel()
+	}
+}
+
+// stopAll cancels everything running.
+func (m *Model) stopAll() {
+	for _, t := range m.turns {
+		t.cancel()
+	}
+}
+
+// drop removes a finished turn.
+func (m *Model) drop(t *turn) {
+	out := m.turns[:0]
+	for _, x := range m.turns {
+		if x != t {
+			out = append(out, x)
+		}
+	}
+	m.turns = out
+}
+
+// thinking is the tail of any reasoning happening now. With several turns in
+// flight the transcript still shows one "thinking…" line: it says the machine
+// is working, and saying it twice tells the reader nothing more.
+func (m Model) thinking() bool {
+	for _, t := range m.turns {
+		if t.think != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // sub finds a running sub-agent by id, nil when it has finished or never was.
 func (m Model) sub(id string) *subView {
 	for _, s := range m.subs {
@@ -543,14 +671,29 @@ func (m Model) watched() *subView {
 // dropSub removes a finished sub-agent, moving the watch to another one that is
 // still running rather than closing the panel out from under the reader.
 func (m *Model) dropSub(id string) {
+	m.keepSubs(func(s *subView) bool { return s.id != id })
+}
+
+// dropSubsOf closes the panels belonging to a turn that has ended. Sub-agents
+// another turn is still running are left alone.
+func (m *Model) dropSubsOf(t *turn) {
+	m.keepSubs(func(s *subView) bool { return s.owner != t })
+}
+
+func (m *Model) keepSubs(keep func(*subView) bool) {
 	out := m.subs[:0]
+	watched := false
 	for _, s := range m.subs {
-		if s.id != id {
-			out = append(out, s)
+		if !keep(s) {
+			continue
 		}
+		out = append(out, s)
+		watched = watched || s.id == m.watching
 	}
 	m.subs = out
-	if m.watching == id {
+	if !watched {
+		// What was being watched has gone. Move to another running sub-agent
+		// rather than closing the panel out from under the reader.
 		m.watching = ""
 		if len(m.subs) > 0 {
 			m.watching = m.subs[0].id
@@ -562,7 +705,12 @@ func (m *Model) dropSub(id string) {
 func (m *Model) newBlock() { m.blockSeq++ }
 
 func (m *Model) push(e entry) {
-	e.block = m.blockSeq
+	// A block set already is one a turn is holding open across other turns'
+	// output, so a click still selects the whole reply rather than the run of
+	// it that happened not to be interrupted.
+	if e.block == 0 {
+		e.block = m.blockSeq
+	}
 	m.entries = append(m.entries, e)
 	rows := e.rows(m.innerWidth())
 	for range rows {
@@ -632,7 +780,7 @@ func (m *Model) rewrap() {
 // itself is never shown — only the tools it uses and the answer it reaches are
 // worth the room — so this line is just a sign the model is still working.
 func (m Model) content() []string {
-	if m.think == "" {
+	if !m.thinking() {
 		return m.display
 	}
 	rows := make([]string, 0, len(m.display)+1)
@@ -731,14 +879,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		if !m.busy {
+		if !m.busy() {
 			return m, nil
 		}
 		m.frame++
 		return m, tick()
 
 	case eventMsg:
-		return m.onEvent(msg.ev)
+		return m.onEvent(msg.turn, msg.ev)
 
 	case statusMsg:
 		m.showProviders(msg.providers)
@@ -760,18 +908,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case streamDoneMsg:
-		m.busy = false
-		m.cancel = nil
-		m.events = nil
-		// A sub-agent cannot outlive the turn that spawned it, so the panels
-		// close here even if the turn ended badly.
-		m.subs = nil
-		m.watching = ""
-		m.input.Focus()
-		if q := m.queued; q != "" {
-			m.queued = ""
-			return m.send(q)
+		t := m.live(msg.turn)
+		if t == nil {
+			return m, nil
 		}
+		// Whatever this turn worked out is folded back into the conversation
+		// now that it has stopped writing to its own copy, so the transcript
+		// holds every turn even though they were answered side by side.
+		if t.ag != nil {
+			t.ag.Merge()
+		}
+		t.cancel()
+		m.drop(t)
+		// A sub-agent cannot outlive the turn that spawned it, so its panels
+		// close here even if the turn ended badly. Only this turn's, though:
+		// another turn may still have children of its own running.
+		m.dropSubsOf(t)
+		m.persist()
+		m.input.Focus()
 		return m, textarea.Blink
 	}
 
@@ -1031,7 +1185,7 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			// Cancelling the turn is the more urgent meaning of esc; the list
 			// is only in the way when nothing is running.
-			if !m.busy {
+			if !m.busy() {
 				m.sugOff = true
 				return *m, nil
 			}
@@ -1059,10 +1213,14 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return *m, nil
 
 	case "ctrl+c":
-		if m.busy {
-			// First interrupt cancels the turn; it does not exit. Quitting
-			// mid-tool-call would leave the transcript inconsistent.
-			m.cancel()
+		if m.busy() {
+			// First interrupt cancels; it does not exit. Quitting mid-tool-call
+			// would leave the transcript inconsistent.
+			//
+			// Everything running stops, because this is the panic key: with
+			// several turns in flight the one thing the user certainly means by
+			// it is "stop". esc is the finer instrument.
+			m.stopAll()
 			return *m, nil
 		}
 		m.quit = true
@@ -1072,15 +1230,19 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Stopping the agent comes first. A pending reply also clears on esc,
 		// but if a turn is running that is not what the key is for — and having
 		// clicked a message mid-turn, the first esc appeared to do nothing.
-		if m.busy {
-			m.cancel()
+		//
+		// With several running it stops the newest, so a question asked by
+		// mistake can be taken back without losing the long piece of work still
+		// going underneath it. Pressing it again walks back through the rest.
+		if m.busy() {
+			m.stop(m.turns[len(m.turns)-1])
 			return *m, nil
 		}
 		m.replyTo = ""
 		return *m, nil
 
 	case "ctrl+d":
-		if !m.busy && m.input.Value() == "" {
+		if !m.busy() && m.input.Value() == "" {
 			m.quit = true
 			return *m, tea.Quit
 		}
@@ -1140,14 +1302,17 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return *m, nil
 
 	case "enter":
-		if m.busy {
-			// The model is mid-turn, blocked on a tool result it asked for, so
-			// it cannot take this now. Hold it and send it the moment the turn
-			// ends, rather than dropping the keystroke on the floor.
-			if q := strings.TrimSpace(m.input.Value()); q != "" {
-				m.queued = q
-				m.input.Reset()
-			}
+		// Sends whether or not anything is running. A turn already in flight is
+		// blocked on a tool result it asked for and cannot take a second
+		// question, so this one is answered beside it rather than queued behind
+		// it — which is the point of being able to set long work going and
+		// carry on talking.
+		//
+		// The exception is a compaction, which is rewriting the very transcript
+		// a new turn would be forked from. It takes one model call, so waiting
+		// is brief, and the text is left in the input rather than swallowed.
+		if m.compacting() {
+			m.add(errStyle.Render("✗ wait for the conversation to finish compacting"))
 			return *m, nil
 		}
 		text := strings.TrimSpace(m.input.Value())
@@ -1310,10 +1475,12 @@ func (m *Model) blank() {
 // openTurn marks the start of an exchange: a dim rule carrying the time, then
 // the question against a coloured bar. The rule is the main thing that makes a
 // long conversation scannable — it is where the eye lands when scrolling back.
-func (m *Model) openTurn(text, quote string) {
+// t names the turn being opened, so a question asked while another is being
+// answered carries the same mark as the reply it will get.
+func (m *Model) openTurn(t *turn, text, quote string) {
 	m.blank()
 	m.newBlock()
-	m.push(entry{rule: true, stamp: time.Now().Format("15:04")})
+	m.push(entry{rule: true, stamp: time.Now().Format("15:04"), turn: t.seq})
 	// What is being replied to, shown the way a messaging app shows it: above
 	// the message, quieter than it, and clearly not something you typed.
 	for _, l := range strings.Split(quote, "\n") {
@@ -1330,13 +1497,25 @@ func (m *Model) openTurn(text, quote string) {
 	// A question can be several lines, either because it was typed with
 	// shift+enter or because it is long enough to wrap. Either way it is one
 	// message: every line gets the bar and the colour.
-	for _, l := range strings.Split(text, "\n") {
+	// The bar already colours the question, so the mark goes outside it rather
+	// than replacing it: what makes a question a question is worth keeping, and
+	// which answer it belongs to is the extra thing being said.
+	bar, pad := barStyle.Render("▌ "), ""
+	if t.tag != "" {
+		bar, pad = t.tag+" "+bar, t.tag+" "
+	}
+	for i, l := range strings.Split(text, "\n") {
+		first := bar
+		if i > 0 {
+			first = pad + barStyle.Render("▌ ")
+		}
 		m.push(entry{
 			kind:  kindUser,
-			first: barStyle.Render("▌ "),
-			cont:  barStyle.Render("▌ "),
+			first: first,
+			cont:  first,
 			text:  l,
 			style: &userStyle,
+			turn:  t.seq,
 		})
 	}
 	// The gap under the question is opened by whatever comes next, via
@@ -1375,45 +1554,72 @@ func (m *Model) send(text string) (tea.Model, tea.Cmd) {
 		sent = q.String()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
-	m.busy = true
+	m.turnSeq++
+	// Every turn answers in a fork, including one asked with nothing else
+	// running. m.ag is the conversation of record and never runs: it is read
+	// and written only here on the UI goroutine, at fork and at merge, so a
+	// question asked while an answer is arriving cannot race with it.
+	//
+	// Letting a lone turn run on m.ag directly and forking only from the second
+	// looked cheaper and was wrong — forking reads the transcript that the
+	// first turn is in the middle of appending to, which is exactly the race
+	// this is all here to avoid.
+	t := &turn{
+		seq:    m.turnSeq,
+		ag:     m.ag.Fork(),
+		cancel: cancel,
+		events: make(chan agent.Event, 64),
+	}
+	if m.busy() {
+		// Two answers are about to arrive into one transcript, so from here on
+		// every line says which one it belongs to — including the turn that was
+		// running on its own until a moment ago.
+		t.tag = turnMark(t.seq)
+		for _, x := range m.turns {
+			if x.tag == "" {
+				x.tag = turnMark(x.seq)
+				// Its earlier lines were written when it had the transcript to
+				// itself and carry no mark. They are marked now, going back, so
+				// the whole answer reads as one rather than as an unattributed
+				// beginning and a marked rest.
+				m.remark(x)
+			}
+		}
+	}
+	m.turns = append(m.turns, t)
 	m.frame = 0
-	m.pending = ""
-	m.think = ""
-	m.md = markdown{}
-	m.inText = false
-	m.warnedFull = false
-	m.rejected = false
-	m.adopt = ""
-	m.events = make(chan agent.Event, 64)
 	// Sending jumps back to the newest output: the reply is what you want to
 	// see, wherever you had scrolled to.
 	m.scroll = 0
-	// The input stays focused while the model works so the next message can be
-	// composed in the meantime. Enter is ignored until the turn finishes, and
-	// the typed text simply stays in the box.
-	go m.ag.Run(ctx, sent, m.events)
+	// The input stays focused and enter keeps working while the model works, so
+	// the next question can be asked without waiting for this one.
+	go t.ag.Run(ctx, sent, t.events)
 
-	m.openTurn(text, quote)
-	return *m, tea.Batch(waitFor(m.events), tick())
+	m.openTurn(t, text, quote)
+	return *m, tea.Batch(waitFor(t, t.events), tick())
 }
 
-func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
-	next := waitFor(m.events)
+func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
+	// A cancelled turn can have events already in flight behind the
+	// cancellation. Its state is gone, so there is nothing to write them into.
+	if m.live(t) == nil {
+		return *m, nil
+	}
+	next := waitFor(t, t.events)
 
 	switch e := ev.(type) {
 
 	case agent.TextDelta:
 		// Once the real answer starts, the thinking has served its purpose.
-		m.think = ""
-		m.pending += e.Text
+		t.think = ""
+		t.pending += e.Text
 		var lines []string
-		lines, m.pending = splitLines(m.pending)
-		m.addText(lines)
+		lines, t.pending = splitLines(t.pending)
+		m.addText(t, lines)
 		return *m, next
 
 	case agent.ReasoningDelta:
-		m.think = m.think + e.Text
+		t.think = t.think + e.Text
 		return *m, next
 
 	case agent.ToolStart:
@@ -1432,11 +1638,9 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 				dimStyle.Render("  "+summarize(e.Args, max(10, m.innerWidth()-len(e.Name)-14))))
 			return *m, next
 		}
-		m.think = ""
-		m.flush()
-		m.inText = false
+		m.settle(t)
 		pad := strings.Repeat("  ", 1+e.Depth)
-		m.pushKind(entry{
+		m.pushTurn(t, entry{
 			kind:  kindWork,
 			first: pad + workStyle.Render("⏺ "),
 			cont:  pad + "    ",
@@ -1446,7 +1650,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		// the file as it was: the tool runs next, and by the time the result
 		// arrives the old contents are gone.
 		if c := codeWindow(m.root, e.Name, e.Args, pad+"  "); c != nil {
-			m.pushKind(entry{kind: kindWork, code: c})
+			m.pushTurn(t, entry{kind: kindWork, code: c})
 		}
 		return *m, next
 
@@ -1464,7 +1668,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 			return *m, next
 		}
 		pad := strings.Repeat("  ", 2+e.Depth)
-		m.pushKind(entry{
+		m.pushTurn(t, entry{
 			kind:  kindWork,
 			first: pad + workDim.Render("↳ "),
 			cont:  pad + "  ",
@@ -1474,12 +1678,12 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 
 	case agent.TaskStart:
 		m.comp.Tasks++
-		m.think = ""
-		m.flush()
-		m.inText = false
-		// The panel opens here and takes the sub-agent's steps from now on.
-		m.subs = append(m.subs, &subView{id: e.ID, desc: e.Description})
-		m.pushKind(entry{
+		m.settle(t)
+		// The panel opens here and takes the sub-agent's steps from now on. It
+		// is tagged with the turn that delegated it, so it closes when that
+		// turn ends rather than when any turn does.
+		m.subs = append(m.subs, &subView{id: e.ID, desc: e.Description, owner: t})
+		m.pushTurn(t, entry{
 			kind:  kindWork,
 			first: "  " + taskStyle.Render("◆ "),
 			cont:  "    ",
@@ -1495,7 +1699,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		if e.Err != nil {
 			text, style = e.Err.Error(), workErr
 		}
-		m.pushKind(entry{
+		m.pushTurn(t, entry{
 			kind:  kindWork,
 			first: "    " + workDim.Render("↳ "),
 			cont:  "      ",
@@ -1523,7 +1727,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 				text = levelStyle.Render(fmt.Sprintf("level %d — %s", after, m.comp.Title())) +
 					dimStyle.Render("  /companion")
 			}
-			m.pushKind(entry{
+			m.pushTurn(t, entry{
 				kind:  kindNotice,
 				first: "  " + mark,
 				cont:  "    ",
@@ -1533,8 +1737,8 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		// Warn before the window overflows rather than after: once the server
 		// starts truncating, the model loses the question it was asked and
 		// begins answering something else entirely.
-		if m.contextNearlyFull() && !m.warnedFull {
-			m.warnedFull = true
+		if m.contextNearlyFull() && !t.warnedFull {
+			t.warnedFull = true
 			m.add(errStyle.Render(fmt.Sprintf(
 				"⚠ context %d%% full — replies will degrade. /compact to summarise it, /clear to start over.",
 				m.ctxTokens*100/m.contextLimit())))
@@ -1542,9 +1746,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.Approval:
-		m.think = ""
-		m.flush()
-		m.inText = false
+		m.settle(t)
 		m.ask = &e
 		return *m, next
 
@@ -1553,14 +1755,14 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 
 	case agent.Switched:
 		m.ref = e.To
-		m.warnedFull = false
+		t.warnedFull = false
 		// A model that refused outright will refuse again next session, so
 		// leaving it as the default means starting every session with the same
 		// failure. The replacement is adopted only once it has actually
 		// answered, though — adopting it here churned the default through a
 		// whole ladder of models that were failing too.
-		if m.rejected && e.From == m.chosen {
-			m.adopt = e.To
+		if t.rejected && e.From == m.chosen {
+			t.adopt = e.To
 		}
 		m.push(entry{
 			first: "  " + okStyle.Render("⇅ "),
@@ -1572,7 +1774,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 
 	case agent.Rejected:
 		if e.Ref == m.chosen {
-			m.rejected = true
+			t.rejected = true
 		}
 		m.push(entry{
 			first: "  " + errStyle.Render("✗ "),
@@ -1626,7 +1828,7 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		// with the next reply. Showing the estimate now stops the bar reading
 		// full against a conversation that is no longer there.
 		m.ctxTokens = e.After
-		m.warnedFull = false
+		t.warnedFull = false
 		m.persist()
 		return *m, next
 
@@ -1643,13 +1845,13 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.TurnEnd:
-		m.think = ""
+		t.think = ""
 		m.comp.Turns++
 		// The turn finished, so whatever produced it works. Now it is worth
 		// remembering in place of the model that refused.
-		if m.adopt != "" {
-			from, to := m.chosen, m.adopt
-			m.adopt, m.rejected, m.chosen = "", false, to
+		if t.adopt != "" {
+			from, to := m.chosen, t.adopt
+			t.adopt, t.rejected, m.chosen = "", false, to
 			if m.cfg.Default != to {
 				m.cfg.Default = to
 				if err := m.cfg.Save(); err != nil {
@@ -1661,12 +1863,11 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		}
 		// Cheap, and catches a branch the agent itself switched.
 		m.branch = vcs.Branch(m.root)
-		m.flush()
-		m.persist()
+		m.flush(t)
 		// Reasoning models sometimes finish a turn having written only
 		// thinking, leaving nothing to show. Say so rather than returning to
 		// the prompt as if nothing happened.
-		if !m.inText {
+		if !t.inText {
 			m.blank()
 			// An empty turn is usually the window overflowing: the server drops
 			// the oldest messages, the model loses the thread, and it returns
@@ -1682,55 +1883,140 @@ func (m *Model) onEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 		return *m, next
 
 	case agent.Failed:
-		m.think = ""
-		m.flush()
+		t.think = ""
+		m.flush(t)
 		msg := e.Err.Error()
 		if errors.Is(e.Err, context.Canceled) {
 			msg = "cancelled"
 		}
 		m.blank()
 		m.add(errStyle.Render("✗ " + msg))
-		m.persist()
+		// Not saved here. The turn is about to end, and what it did reaches the
+		// conversation only when it is merged back — saving now would write out
+		// a transcript missing the very exchange that just failed.
 		return *m, next
 	}
 
 	return *m, next
 }
 
-// addText styles assistant lines as markdown and appends them, opening the
-// block with a blank line so prose is set off from the tool calls above it.
-func (m *Model) addText(lines []string) {
+// addText styles a turn's assistant lines as markdown and appends them, opening
+// the block with a blank line so prose is set off from the tool calls above it.
+func (m *Model) addText(t *turn, lines []string) {
 	if len(lines) == 0 {
 		return
 	}
-	if !m.inText {
-		m.inText = true
+	if !t.inText {
+		t.inText = true
 		// The reply is its own message, so a click anywhere in it quotes all
 		// of it rather than the one line under the pointer.
 		m.newBlock()
+		t.block = m.blockSeq
 	}
 	for _, l := range lines {
-		e := m.md.entry(l)
+		e := t.md.entry(l)
 		e.kind = kindReply
 		// Only the first line can need a gap opening before it; once inside a
 		// reply, consecutive lines are the same kind and stay together.
-		m.pushKind(e)
+		m.pushTurn(t, e)
 	}
 }
 
-// flush turns any buffered text into transcript lines, including a final line
-// with no trailing newline.
-func (m *Model) flush() {
-	lines, rest := splitLines(m.pending)
+// flush turns a turn's buffered text into transcript lines, including a final
+// line with no trailing newline.
+func (m *Model) flush(t *turn) {
+	lines, rest := splitLines(t.pending)
 	if strings.TrimSpace(rest) != "" {
 		lines = append(lines, rest)
 	}
-	m.pending = ""
-	m.addText(lines)
+	t.pending = ""
+	m.addText(t, lines)
+}
+
+// settle closes off whatever prose a turn had in flight, which is what every
+// non-text event has to do before writing a line of its own.
+func (m *Model) settle(t *turn) {
+	t.think = ""
+	m.flush(t)
+	t.inText = false
+}
+
+// pushTurn writes a line on a turn's behalf: its gutter mark in front, and its
+// own block so a click selects the whole reply even when another turn's output
+// landed in the middle of it.
+//
+// It is also where interleaving is kept readable. Two turns writing
+// alternate lines into one transcript would otherwise run together; the mark
+// says which answer a line belongs to, and a change of speaker opens a gap the
+// way a change of kind does.
+func (m *Model) pushTurn(t *turn, e entry) {
+	if t.tag != "" {
+		e.first = t.tag + " " + e.first
+		e.cont = t.tag + " " + e.cont
+		if m.lastTurn() != t.seq {
+			m.push(entry{})
+		}
+	}
+	e.block = t.block
+	e.turn = t.seq
+	m.pushKind(e)
+}
+
+// remark puts a turn's gutter in front of the lines it wrote before it had one.
+// A turn that starts alone is unmarked — there is nothing to tell it apart
+// from — and acquires a mark only when a second turn joins it, so its opening
+// lines have to be caught up.
+func (m *Model) remark(t *turn) {
+	for i := range m.entries {
+		e := &m.entries[i]
+		if e.turn != t.seq || strings.HasPrefix(e.first, t.tag) {
+			continue
+		}
+		// A rule spans the width and is redrawn on resize; marking it would put
+		// the gutter inside the line rather than in front of it.
+		if e.rule {
+			continue
+		}
+		e.first = t.tag + " " + e.first
+		e.cont = t.tag + " " + e.cont
+	}
+	m.rewrap()
+}
+
+// lastTurn is which turn wrote the last non-blank line, zero when none did.
+func (m Model) lastTurn() int {
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		if e := m.entries[i]; !e.blankLine() {
+			return e.turn
+		}
+	}
+	return 0
+}
+
+// midTurn are the commands that cannot run while anything is being answered,
+// because each rewrites the conversation a live turn is in the middle of
+// appending to — clearing it, replacing it with a saved one, summarising it, or
+// moving the files underneath it.
+//
+// This list used to be unnecessary: enter did nothing mid-turn, so no command
+// could be reached either. Now that a question can be asked while another is
+// running, commands arrive at the same time as turns and have to say so
+// themselves. /compact and /branch already did, and this is the rest of them.
+var midTurn = map[string]string{
+	"/clear":   "/clear",
+	"/new":     "/clear",
+	"/resume":  "/resume",
+	"/compact": "/compact",
+	"/branch":  "/branch",
+	"/br":      "/branch",
 }
 
 func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 	fields := strings.Fields(line)
+	if name, ok := midTurn[fields[0]]; ok && m.busy() {
+		m.add(errStyle.Render("✗ " + name + " has to wait for the turn to finish"))
+		return *m, nil
+	}
 	switch fields[0] {
 
 	case "/quit", "/exit", "/q":
@@ -1746,7 +2032,6 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		m.display = nil
 		m.scroll = 0
 		m.ctxTokens = 0
-		m.warnedFull = false
 		return *m, nil
 
 	case "/sessions":
@@ -1788,7 +2073,6 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		m.display = nil
 		m.scroll = 0
 		m.ctxTokens = 0
-		m.warnedFull = false
 		m.replay()
 		return *m, nil
 
@@ -1801,14 +2085,9 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		return m.switchModel(fields[1])
 
 	case "/branch", "/br":
-		if m.busy {
-			// The agent is mid-turn with tools running against these files.
-			// Moving the working tree underneath it would have it read one
-			// branch and write to another, and the note appended on the way
-			// races with the turn appending to the same transcript.
-			m.add(errStyle.Render("✗ /branch has to wait for the turn to finish"))
-			return *m, nil
-		}
+		// Refused mid-turn by midTurn above: the agent has tools running
+		// against these files, and moving the working tree underneath it would
+		// have it read one branch and write to another.
 		if m.branch == "" {
 			m.add(errStyle.Render("✗ not a git repository"))
 			return *m, nil
@@ -1869,20 +2148,19 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		return *m, nil
 
 	case "/compact":
-		if m.busy {
-			m.add(errStyle.Render("✗ /compact has to wait for the turn to finish"))
-			return *m, nil
-		}
-		// Driven over the same event channel as a turn, so it gets the spinner,
-		// esc to cancel and the busy state without any machinery of its own.
+		// Driven as a turn, so it gets the spinner, esc to cancel and the busy
+		// state without any machinery of its own. Refused while anything else
+		// is running — it rewrites the very messages a turn is appending to —
+		// which is why it can use the conversation's own agent rather than a
+		// fork, and why its turn carries no agent to merge back.
 		focus := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
 		ctx, cancel := context.WithCancel(context.Background())
-		m.cancel = cancel
-		m.busy = true
+		m.turnSeq++
+		t := &turn{seq: m.turnSeq, cancel: cancel, events: make(chan agent.Event, 8)}
+		m.turns = append(m.turns, t)
 		m.frame = 0
-		m.events = make(chan agent.Event, 8)
 		m.scroll = 0
-		go m.ag.RunCompact(ctx, focus, m.events)
+		go m.ag.RunCompact(ctx, focus, t.events)
 
 		m.blank()
 		note := "⋯ compacting the conversation…"
@@ -1892,7 +2170,7 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 			note = fmt.Sprintf("⋯ compacting the conversation, keeping %q in view…", focus)
 		}
 		m.add(askStyle.Render(note))
-		return *m, tea.Batch(waitFor(m.events), tick())
+		return *m, tea.Batch(waitFor(t, t.events), tick())
 
 	case "/companion", "/comp":
 		for _, e := range m.companionRows() {
@@ -2015,19 +2293,23 @@ func (m Model) View() tea.View {
 		// show working-out nobody asked to see.
 		f := spinnerFrames[m.frame%len(spinnerFrames)]
 		status = subsHint(m.subs, f, m.innerWidth())
-	} else if m.busy {
+	} else if m.busy() {
 		f := spinnerFrames[m.frame%len(spinnerFrames)]
-		// The model is mid-turn. Its thinking is not shown, so this only
-		// reports that it is working and what to press to stop.
-		tail := "  esc to cancel"
-		if m.queued != "" {
-			tail = "  ⏎ 1 queued  ·  esc to cancel"
+		// Something is being answered. The thinking is not shown, so this only
+		// reports that work is in flight, how much, and what to press to stop.
+		//
+		// The count is the thing worth saying when there are several: it is the
+		// difference between "still going" and "I started three of these", and
+		// it is the only sign on the screen that the question just typed went
+		// somewhere rather than nowhere.
+		work, tail := "working", "  esc to cancel"
+		if n := len(m.turns); n > 1 {
+			work = fmt.Sprintf("working on %d turns", n)
+			tail = "  esc cancels the newest  ·  ctrl+c all"
 		}
 		status = spinStyle.Render(f) + " " +
-			dimStyle.Render(ansi.Truncate("working", max(10, m.innerWidth()-len(tail)-6), "…")) +
+			dimStyle.Render(ansi.Truncate(work, max(10, m.innerWidth()-len(tail)-6), "…")) +
 			dimStyle.Render(tail)
-	} else if m.queued != "" {
-		status = dimStyle.Render("⏎ queued: " + ansi.Truncate(m.queued, max(10, m.innerWidth()-24), "…"))
 	} else if m.scroll > 0 {
 		unit := "lines"
 		if m.scroll == 1 {
@@ -2193,7 +2475,7 @@ func (m Model) transcript() []string {
 // no background — so the terminal still shows through the frame.
 func (m Model) box() string {
 	border := borderIdle
-	if m.busy {
+	if m.busy() {
 		border = borderBusy
 	}
 	return lipgloss.NewStyle().
@@ -2318,13 +2600,16 @@ func splitLines(s string) (lines []string, rest string) {
 	return strings.Split(s[:i], "\n"), s[i+1:]
 }
 
-func waitFor(ch chan agent.Event) tea.Cmd {
+// waitFor blocks on one event from a turn's channel. The turn travels with the
+// message so the model can route it even when several are streaming at once —
+// an index would go stale the moment an earlier turn finished.
+func waitFor(t *turn, ch chan agent.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return streamDoneMsg{}
+			return streamDoneMsg{turn: t}
 		}
-		return eventMsg{ev}
+		return eventMsg{turn: t, ev: ev}
 	}
 }
 

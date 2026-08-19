@@ -1044,7 +1044,7 @@ flood the transcript:
   │ ⏺ read  internal/ui/subview.go                           │
   │   ↳ 70 lines                                             │
   ╰──────────────────────────────────────────────────────────╯
-  ⠇ working  ⏎ 1 queued  ·  esc to cancel
+  ⠇ working on 2 turns  esc cancels the newest  ·  ctrl+c all
   ╭──────────────────────────────────────────────────────────╮
   │ ›                                                        │
   ╰──────────────────────────────────────────────────────────╯
@@ -1055,16 +1055,40 @@ The panel opens when a sub-agent starts, follows it live, and collapses when it
 finishes, leaving one line in the transcript. What a sub-agent did is
 working-out, not conversation.
 
-**You can keep typing while it runs.** Press enter and the message is held and
-sent the moment the turn ends — the status row shows `⏎ 1 queued`. It cannot be
-delivered sooner: the model is mid-turn, blocked on a tool result it asked for,
-and cannot accept new input until that returns. Queueing is the honest version
-of carrying on while it works.
+**You can keep talking while it runs.** Press enter and the question is answered
+straight away, beside the one already in flight, rather than waiting for it.
+That is the point of setting a long piece of work going: you carry on.
 
-**This is a context technique, not a concurrency one.** Nothing runs in
-parallel: a local model serves one request at a time — two concurrent requests
-to the same Ollama measured *slower* than two sequential ones — so parallelism
-would buy nothing on a local setup.
+It cannot go to the same turn — that one is mid-flight, blocked on a tool result
+it asked for — so it gets a fork of the conversation: the same tools, everything
+said up to that moment, and its own transcript to answer into. The exchange is
+folded back when it finishes, so the conversation ends up holding every turn
+even though they were answered side by side.
+
+Two answers arriving into one transcript have to be readable apart, so once a
+second turn starts every line carries a gutter mark naming the turn it belongs
+to — by shape as well as colour, so a screenshot in black and white still reads:
+
+```
+  ────────────────────────────────────────────────────────────── 14:02
+  ┃ ▌ summarise every file in internal/
+
+  ────────────────────────────────────────────────────────────── 14:02
+  ┆ ▌ meanwhile, what does vcs.Branch do?
+
+  ┆ It shells out to git rev-parse and returns the branch name.
+  ┃   ⏺ read  internal/ui/markdown.go
+```
+
+`esc` cancels the newest turn, so a question asked by mistake can be taken back
+without losing the long piece of work still running underneath it; `ctrl+c`
+stops everything. The two commands that rewrite the conversation — `/compact`
+and `/clear` — still wait for it to be quiet, since there would be nothing
+coherent to rewrite otherwise.
+
+**Delegation is a context technique first.** Sub-agents overlap, but against a
+local model that buys little: it serves one request at a time — two concurrent
+requests to the same Ollama measured *slower* than two sequential ones.
 
 What it buys is room. Measured on the run above:
 
