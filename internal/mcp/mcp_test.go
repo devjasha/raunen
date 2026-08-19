@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,5 +229,35 @@ func TestCallToolAfterRestart(t *testing.T) {
 	}
 	if out != "pong: again" {
 		t.Errorf("result = %q, want %q", out, "pong: again")
+	}
+}
+
+// An "sse" server without a URL must be rejected with an error mentioning the
+// missing url, just like the "http" type. This needs no live server.
+func TestSSETypeRequiresURL(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := Start(ctx, "x", Server{Type: "sse"})
+	if err == nil {
+		t.Fatal("expected an error for sse with no url")
+	}
+	if !strings.Contains(err.Error(), "url") {
+		t.Errorf("error = %q, want it to mention url", err.Error())
+	}
+}
+
+// newSSE must construct without a live server (the GET stream is opened in the
+// background) and Close must not error. We point it at a port nothing listens on
+// so the background connection simply fails without panicking.
+func TestSSEConstruction(t *testing.T) {
+	tr, err := newSSE("x", Server{URL: "http://localhost:1/sse"})
+	if err != nil {
+		t.Fatalf("newSSE: %v", err)
+	}
+	if tr == nil {
+		t.Fatal("newSSE returned nil transport")
+	}
+	if err := tr.close(); err != nil {
+		t.Errorf("close: %v", err)
 	}
 }
