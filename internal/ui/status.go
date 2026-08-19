@@ -242,10 +242,17 @@ func (m *Model) showMCP() tea.Cmd {
 	}
 	sort.Strings(names)
 
+	// Read the counts once so every row in this listing agrees, even if a server
+	// refreshes its toolset while we are rendering.
+	counts := map[string]int{}
+	if m.mcp != nil {
+		counts = m.mcp()
+	}
+
 	total := 0
 	for _, n := range names {
 		_, on := active[n]
-		count := m.mcp[n]
+		count := counts[n]
 		total += count
 		state := dimStyle.Render("off")
 		if on {

@@ -37,6 +37,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"raunen/internal/tools"
 )
@@ -103,6 +105,11 @@ type Client struct {
 	s    Server
 	t    transport
 
+	// mu guards tools and onToolsChanged. A tools/list_changed notification is
+	// delivered on the transport's read goroutine, so a live refresh can rewrite
+	// the toolset while the agent is reading it.
+	mu sync.Mutex
+
 	tools []tools.Tool
 
 	// serverProtocolVersion is the version the server agreed to speak, from the
@@ -156,20 +163,44 @@ func Start(ctx context.Context, name string, s Server) (*Client, error) {
 		return nil, fmt.Errorf("mcp %q: %w", name, err)
 	}
 	// Register a live notification handler so a server advertising ListChanged can
-	// refresh our toolset without polling. The callback fires from the transport's
-	// read goroutine; listTools re-drives the full handshake half of the protocol.
-	c.t.OnNotification(func(method string, params json.RawMessage) {
-		if method == "notifications/tools/list_changed" {
-			if err := c.listTools(ctx); err == nil && c.onToolsChanged != nil {
-				c.onToolsChanged(c.name, c.Tools())
+	// refresh our toolset without polling.
+	//
+	// The refresh runs on its own goroutine, and deliberately not on the one that
+	// delivered the notification: that is the transport's read loop, and the
+	// tools/list it issues can only be answered by that same loop, so calling it
+	// inline deadlocks until the context expires. The Start context is not reused
+	// either — it covers startup and is usually cancelled by the time a server
+	// changes its mind — so the re-list gets a fresh timeout of its own.
+	if c.caps.Tools.ListChanged {
+		c.t.OnNotification(func(method string, params json.RawMessage) {
+			if method != "notifications/tools/list_changed" {
+				return
 			}
-		}
-	})
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := c.listTools(ctx); err != nil {
+					return
+				}
+				c.mu.Lock()
+				cb := c.onToolsChanged
+				c.mu.Unlock()
+				if cb != nil {
+					cb(c.name, c.Tools())
+				}
+			}()
+		})
+	}
 	return c, nil
 }
 
-// Tools returns the tools this server advertised, ready to register.
-func (c *Client) Tools() []tools.Tool { return c.tools }
+// Tools returns the tools this server advertised, ready to register. The slice
+// is a copy, so a live refresh cannot rewrite it underneath a caller.
+func (c *Client) Tools() []tools.Tool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]tools.Tool(nil), c.tools...)
+}
 
 // Name reports the server's configured name.
 func (c *Client) Name() string { return c.name }
@@ -178,7 +209,9 @@ func (c *Client) Name() string { return c.name }
 // notification triggers a live refresh of the server's toolset. It is a no-op
 // until the transport delivers such a notification.
 func (c *Client) SetOnToolsChanged(cb func(name string, tools []tools.Tool)) {
+	c.mu.Lock()
 	c.onToolsChanged = cb
+	c.mu.Unlock()
 }
 
 // ServerProtocolVersion reports the protocol version the server negotiated during
@@ -218,6 +251,11 @@ func (c *Client) restart(ctx context.Context) error {
 			return fmt.Errorf("mcp %q: http type requires a url", c.name)
 		}
 		nt, err = newHTTP(c.name, c.s)
+	case "sse":
+		if c.s.URL == "" {
+			return fmt.Errorf("mcp %q: sse type requires a url", c.name)
+		}
+		nt, err = newSSE(c.name, c.s)
 	default:
 		return fmt.Errorf("mcp %q: unknown type %q", c.name, c.s.Type)
 	}
@@ -250,10 +288,10 @@ func (c *Client) Reload(ctx context.Context) ([]tools.Tool, error) {
 }
 
 func (c *Client) initialize(ctx context.Context) error {
-	res := struct {
-		Error  *rpcError        `json:"error"`
-		Result InitializeResult `json:"result"`
-	}{}
+	// call already peels the {"result": ...} envelope, so this decodes the result
+	// body directly. Wrapping it in another "result" field would silently leave
+	// every field zero — and a zero capability set means no live tool refresh.
+	var res InitializeResult
 	if err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		// We advertise the tools capability so a server knows we will call
@@ -264,12 +302,10 @@ func (c *Client) initialize(ctx context.Context) error {
 	}, &res); err != nil {
 		return err
 	}
-	if res.Error != nil {
-		return res.Error
-	}
-	// Record what the server actually agreed to so later code can adapt.
-	c.serverProtocolVersion = res.Result.ProtocolVersion
-	c.caps = res.Result.Capabilities
+	// Record what the server actually agreed to so later code can adapt. A
+	// protocol-level error would have surfaced from call as an error already.
+	c.serverProtocolVersion = res.ProtocolVersion
+	c.caps = res.Capabilities
 	// initialize is followed by an optional initialized notification; we do not
 	// wait for a reply to it, so just send it and move on.
 	_ = c.t.notify(ctx, "notifications/initialized", map[string]any{})
@@ -287,10 +323,9 @@ func (c *Client) listTools(ctx context.Context) error {
 	if res.Error != nil {
 		return res.Error
 	}
-	// Replace the tool set rather than appending, so a reload (after a restart or
-	// a tools/list_changed notification) reflects the server's current tools
-	// exactly, instead of duplicating the previous set.
-	c.tools = c.tools[:0]
+	// Build the new set before taking the lock, so a reader never observes a
+	// half-written toolset during a live refresh.
+	var built []tools.Tool
 	for _, t := range res.Tools {
 		schema := t.InputSchema
 		if schema == nil {
@@ -309,7 +344,7 @@ func (c *Client) listTools(ctx context.Context) error {
 			mutates = !*t.Annotations.ReadOnlyHint
 		}
 		// Capture per-tool state in values, so each closure sees its own.
-		c.tools = append(c.tools, tools.Tool{
+		built = append(built, tools.Tool{
 			Name:        name,
 			Description: "[" + c.name + "] " + desc,
 			Params:      schema,
@@ -319,6 +354,12 @@ func (c *Client) listTools(ctx context.Context) error {
 			},
 		})
 	}
+	// Replace the tool set rather than appending, so a reload (after a restart or
+	// a tools/list_changed notification) reflects the server's current tools
+	// exactly, instead of duplicating the previous set.
+	c.mu.Lock()
+	c.tools = built
+	c.mu.Unlock()
 	return nil
 }
 

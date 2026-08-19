@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -166,7 +167,9 @@ func run() error {
 	comp := companion.Load()
 	ui.Version = version
 	m := ui.New(cfg, ag, root, ref, sess, comp)
-	m.SetMCPSummary(mcpServers.counts)
+	// Counts is read at render time, so a server that revises its toolset
+	// mid-session shows up in /mcp and /status without a restart.
+	m.SetMCPCounts(mcpServers.Counts)
 	_, err = tea.NewProgram(m).Run()
 	return err
 }
@@ -176,8 +179,11 @@ func run() error {
 // contributed can be folded into the registry deterministically.
 type mcpServers struct {
 	clients []*mcp.Client
-	// byName maps a server name to how many tools it contributed, for /status.
+	// counts maps a server name to how many tools it contributed, for /status and
+	// /mcp. A server may refresh its toolset mid-session when it advertises
+	// Tools.ListChanged, so onToolsChanged updates this under mu.
 	counts map[string]int
+	mu     sync.Mutex
 }
 
 // Close stops every MCP server, freeing its process. The agent keeps running;
@@ -194,19 +200,44 @@ func (s *mcpServers) Close() {
 func (s *mcpServers) AddTo(reg *tools.Registry) *tools.Registry {
 	out := reg.Clone()
 	for _, c := range s.clients {
+		name := c.Name()
+		// A server that advertises Tools.ListChanged may add or remove tools
+		// while we are running; it reports a tools/list_changed notification and
+		// the client re-lists, then hands the fresh set here so /status and /mcp
+		// reflect it without a restart. The callback fires from the transport's
+		// read goroutine, so guard the map with mu.
+		c.SetOnToolsChanged(func(server string, ts []tools.Tool) {
+			s.mu.Lock()
+			s.counts[server] = len(ts)
+			s.mu.Unlock()
+		})
 		cnt := 0
 		for _, t := range c.Tools() {
-			name := t.Name
+			tname := t.Name
 			// Two servers may both expose "search"; disambiguate rather than let
 			// the second overwrite the first, which would silently reroute calls.
-			for out.Has(name) {
-				name = c.Name() + "_" + t.Name
+			for out.Has(tname) {
+				tname = name + "_" + t.Name
 			}
-			t.Name = name
+			t.Name = tname
 			out.Add(t)
 			cnt++
 		}
-		s.counts[c.Name()] = cnt
+		s.mu.Lock()
+		s.counts[name] = cnt
+		s.mu.Unlock()
+	}
+	return out
+}
+
+// Counts returns a snapshot of how many tools each server contributed, safe to
+// read from the UI goroutine while a refresh may be updating it.
+func (s *mcpServers) Counts() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int, len(s.counts))
+	for k, v := range s.counts {
+		out[k] = v
 	}
 	return out
 }

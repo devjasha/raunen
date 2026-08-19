@@ -261,3 +261,53 @@ func TestSSEConstruction(t *testing.T) {
 		t.Errorf("close: %v", err)
 	}
 }
+
+// A tools/list_changed notification must drive a re-list and hand the refreshed
+// set to the registered callback. This is the whole point of the live refresh:
+// /mcp and /status should reflect a server that grew a tool without a restart.
+func TestToolsChangedRefreshes(t *testing.T) {
+	c := newMock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// The server only advertises the extra tool after "announce", so the initial
+	// listing must not contain it.
+	if len(c.Tools()) != 2 {
+		t.Fatalf("tools before = %d, want 2", len(c.Tools()))
+	}
+
+	got := make(chan []tools.Tool, 1)
+	c.SetOnToolsChanged(func(name string, ts []tools.Tool) {
+		if name != "mock" {
+			t.Errorf("callback server = %q, want mock", name)
+		}
+		// Non-blocking: the notification may arrive more than once.
+		select {
+		case got <- ts:
+		default:
+		}
+	})
+
+	// announce makes the server emit notifications/tools/list_changed.
+	if _, err := c.callTool(ctx, "announce", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("announce: %v", err)
+	}
+
+	select {
+	case ts := <-got:
+		if len(ts) != 3 {
+			t.Errorf("refreshed tools = %d, want 3", len(ts))
+		}
+		var found bool
+		for _, tool := range ts {
+			if tool.Name == "extra" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("refreshed set is missing the new tool: %v", ts)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the tools/list_changed callback")
+	}
+}
