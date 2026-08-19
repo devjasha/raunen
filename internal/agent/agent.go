@@ -149,9 +149,6 @@ func retryDelay(attempt int) time.Duration {
 	return time.Duration(attempt) * 1500 * time.Millisecond
 }
 
-// maxSteps bounds a single turn so a confused model cannot loop forever.
-const maxSteps = 40
-
 type Agent struct {
 	client   *provider.Client
 	tools    *tools.Registry
@@ -167,6 +164,9 @@ type Agent struct {
 	fallbacks  []Candidate
 	rung       int
 	autoSwitch bool
+	// maxSteps optionally bounds the tool-calling steps in one turn. Zero, the
+	// default, means unbounded; it exists only to stop a model that loops.
+	maxSteps int
 	// health remembers what has recently failed, so the same dead end is not
 	// walked into every turn. Shared with sub-agents by pointer.
 	health *health
@@ -217,6 +217,16 @@ func (a *Agent) Context() int { return a.contextTokens }
 
 // SetAutoSwitch enables escalation up the fallback ladder.
 func (a *Agent) SetAutoSwitch(on bool) { a.autoSwitch = on }
+
+// SetMaxSteps bounds the tool-calling steps in a single turn. Zero — the
+// default — leaves a turn unbounded, which is what long tasks need; set it only
+// as a backstop against a model that loops instead of finishing.
+func (a *Agent) SetMaxSteps(n int) {
+	if n < 0 {
+		n = 0
+	}
+	a.maxSteps = n
+}
 
 // SetContext tells the agent how large the model's context window is, so it can
 // keep requests inside it. Zero disables trimming.
@@ -450,6 +460,7 @@ func (a *Agent) Fork() *Agent {
 		ref:           a.ref,
 		fallbacks:     a.fallbacks,
 		autoSwitch:    a.autoSwitch,
+		maxSteps:      a.maxSteps,
 		health:        a.health,
 		approving:     a.approving,
 		parent:        a,
@@ -513,12 +524,15 @@ func (a *Agent) Restore(msgs []provider.Message) {
 // Cancelling ctx aborts the turn; the partial transcript is retained so the
 // conversation stays coherent.
 func (a *Agent) Run(ctx context.Context, input string, out chan<- Event) {
-	a.run(ctx, input, out, maxSteps)
+	a.run(ctx, input, out)
 }
 
-// run is Run with an explicit step budget, so a sub-agent can be held to a
-// tighter one than the conversation that spawned it.
-func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps int) {
+// run executes a turn until the model stops requesting tools or is cancelled.
+// There is deliberately no step limit by default: a turn ends when the task is
+// finished, and if the model runs low on context it escalates to the next model
+// on the fallback ladder (see escalate) instead of being cut off. SetMaxSteps
+// can impose one as a backstop against a model that loops.
+func (a *Agent) run(ctx context.Context, input string, out chan<- Event) {
 	defer close(out)
 	a.out = out
 
@@ -528,7 +542,13 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 	// deserve the expensive model just because an earlier one needed it.
 	a.rung = 0
 
-	for step := 0; step < steps; step++ {
+	for step := 0; ; step++ {
+		// Only when the user asked for a backstop. Unlimited is the default, so
+		// a long task is never cut off for being long.
+		if a.maxSteps > 0 && step >= a.maxSteps {
+			out <- Failed{Err: fmt.Errorf("stopped after %d steps (max_steps); the task may be unfinished", a.maxSteps)}
+			return
+		}
 		// Grow before shrinking. Dropping earlier tool results makes the model
 		// forget what it already found and investigate the same thing again,
 		// which is worse than the request being large — so every rung of the
@@ -675,7 +695,6 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event, steps i
 			return
 		}
 	}
-	out <- Failed{Err: fmt.Errorf("gave up after %d steps", steps)}
 }
 
 // dispatchAll runs a batch of tool calls and returns their results in the order

@@ -1182,6 +1182,18 @@ Size it against your RAM, not just the model: 16384 on a 16 GB machine running a
 you are actually getting with `ollama ps` — the `CONTEXT` column is the truth.
 `RAUNEN_DEBUG=1` prints per-request token accounting on stderr.
 
+**A turn runs until the work is done.** There is no step limit: a turn ends when
+the model stops asking for tools, not when a counter runs out. A long task is a
+long task, and being cut off mid-edit is worse than being slow — when the window
+fills, raunen escalates to a roomier model and carries on rather than giving up.
+
+If you are testing a model that loops instead of finishing, `max_steps` is an
+opt-in backstop. It is absent by default, and absent means unlimited:
+
+```json
+{ "max_steps": 200 }
+```
+
 **Growing beats summarising beats shrinking.** When a conversation outgrows the
 window, raunen tries three things in that order.
 

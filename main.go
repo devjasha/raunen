@@ -121,6 +121,8 @@ func run() error {
 	ag.SetContext(window)
 	ag.SetRef(ref)
 	ag.SetAutoSwitch(cfg.AutoSwitch)
+	// Zero unless the user set it: turns are unbounded by default.
+	ag.SetMaxSteps(cfg.MaxSteps)
 	ladder := fallbacks(cfg)
 	ag.SetFallbacks(ladder)
 	if debug && len(ladder) > 0 {

@@ -62,6 +62,11 @@ type Config struct {
 	// largest context first. Free tiers are rate limited rather than billed, so
 	// a ladder of them is a way to keep going rather than to spend more.
 	FreeFallback bool `json:"free_fallback"`
+	// MaxSteps is an opt-in backstop on how many tool-calling steps one turn may
+	// take, for the rare model that loops instead of finishing. Zero — the
+	// default — means no limit: a turn ends when the work is done, and running
+	// low on context escalates up the ladder rather than cutting the turn off.
+	MaxSteps int `json:"max_steps,omitempty"`
 	// Subagents lets the model delegate self-contained work to a sub-agent with
 	// its own context. It costs one more tool schema on every request, so it
 	// can be turned off on a very small window.

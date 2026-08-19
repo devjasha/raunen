@@ -33,11 +33,6 @@ findings, the file and line, the explanation. Your reply is all that is passed
 back — the caller cannot see anything else you did, so do not refer to "the
 above" or promise follow-up. Be brief and concrete. You cannot delegate.`
 
-// subSteps bounds a sub-agent more tightly than a main turn. A child that
-// wanders is worse than one that gives up: the caller is waiting, and every
-// step it takes is spent from the same wall-clock budget.
-const subSteps = 16
-
 // taskSeq names sub-agents. Siblings are started from separate goroutines, so
 // it is bumped atomically.
 var taskSeq uint64
@@ -110,13 +105,16 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 		health:     a.health,
 		fallbacks:  a.fallbacks,
 		autoSwitch: a.autoSwitch,
-		ref:        a.ref,
-		depth:      a.depth + 1,
-		messages:   []provider.Message{{Role: provider.System, Content: subSystem + a.mode.guidance()}},
+		// The same backstop applies to the child: a looping sub-agent is the
+		// case it was added for.
+		maxSteps: a.maxSteps,
+		ref:      a.ref,
+		depth:    a.depth + 1,
+		messages: []provider.Message{{Role: provider.System, Content: subSystem + a.mode.guidance()}},
 	}
 
 	events := make(chan Event, 64)
-	go child.run(ctx, args.Prompt, events, subSteps)
+	go child.run(ctx, args.Prompt, events)
 
 	// Forward the child's events to the frontend as they arrive, and keep its
 	// closing text. Approvals travel through untouched, reply channel and all,
