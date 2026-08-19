@@ -43,15 +43,29 @@ func main() {
 			})
 		case "tools/list":
 			write(out, req.ID, map[string]any{
-				"tools": []map[string]any{{
-					"name":        "ping",
-					"description": "echo the message back",
-					"inputSchema": map[string]any{
-						"type":       "object",
-						"properties": map[string]any{"msg": map[string]any{"type": "string"}},
-						"required":   []string{"msg"},
+				"tools": []map[string]any{
+					{
+						"name":        "ping",
+						"description": "echo the message back",
+						"inputSchema": map[string]any{
+							"type":       "object",
+							"properties": map[string]any{"msg": map[string]any{"type": "string"}},
+							"required":   []string{"msg"},
+						},
 					},
-				}},
+					{
+						"name":        "lookup",
+						"description": "read a value without changing anything",
+						// readOnlyHint true declares the tool only reads, so the
+						// client should treat it as non-mutating (plan-safe).
+						"annotations": map[string]any{"readOnlyHint": true},
+						"inputSchema": map[string]any{
+							"type":       "object",
+							"properties": map[string]any{"key": map[string]any{"type": "string"}},
+							"required":   []string{"key"},
+						},
+					},
+				},
 			})
 		case "tools/call":
 			var args struct {
