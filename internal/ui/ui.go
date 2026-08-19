@@ -455,6 +455,12 @@ type entry struct {
 	// of rows would keep the border width it was built at and leave a ragged
 	// column down the screen. See codeBlock.
 	code *codeBlock
+	// toolLive marks a tool call — its start line, its code window, and its
+	// result — as the agent's current step. The next tool call replaces it
+	// rather than adding another line, so the transcript shows only what the
+	// agent is doing now. What it was doing ten steps ago is not what the
+	// reader came to see.
+	toolLive bool
 }
 
 // blankLine reports whether an entry renders as empty space. A code window is
@@ -725,6 +731,18 @@ func (m *Model) push(e entry) {
 		m.rewrap()
 	}
 	m.clampScroll()
+}
+
+// dropLive removes the entries marked toolLive — the agent's previous step —
+// so the next one can replace them. Only the trailing run is touched, because
+// live entries are always the most recent: a tool call is born live and stays
+// live until it is superseded by the next, and nothing is appended after it
+// but the next step or the prose that ends the turn.
+func (m *Model) dropLive() {
+	for len(m.entries) > 0 && m.entries[len(m.entries)-1].toolLive {
+		m.entries = m.entries[:len(m.entries)-1]
+	}
+	m.rewrap()
 }
 
 // add appends plain lines with no prefix.
@@ -1639,18 +1657,22 @@ func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
 			return *m, next
 		}
 		m.settle(t)
+		// The previous step is now in the past; drop it so this one takes its
+		// place rather than piling another line onto the transcript.
+		m.dropLive()
 		pad := strings.Repeat("  ", 1+e.Depth)
 		m.pushTurn(t, entry{
-			kind:  kindWork,
-			first: pad + workStyle.Render("⏺ "),
-			cont:  pad + "    ",
-			text:  workStyle.Render(e.Name) + workDim.Render("  "+summarize(e.Args, max(20, m.innerWidth()-len(e.Name)-10))),
+			kind:     kindWork,
+			toolLive: true,
+			first:    pad + workStyle.Render("⏺ "),
+			cont:     pad + "    ",
+			text:     workStyle.Render(e.Name) + workDim.Render("  "+summarize(e.Args, max(20, m.innerWidth()-len(e.Name)-10))),
 		})
 		// Built here rather than at ToolEnd because the window is a picture of
 		// the file as it was: the tool runs next, and by the time the result
 		// arrives the old contents are gone.
 		if c := codeWindow(m.root, e.Name, e.Args, pad+"  "); c != nil {
-			m.pushTurn(t, entry{kind: kindWork, code: c})
+			m.pushTurn(t, entry{kind: kindWork, toolLive: true, code: c})
 		}
 		return *m, next
 
@@ -1669,10 +1691,11 @@ func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
 		}
 		pad := strings.Repeat("  ", 2+e.Depth)
 		m.pushTurn(t, entry{
-			kind:  kindWork,
-			first: pad + workDim.Render("↳ "),
-			cont:  pad + "  ",
-			text:  style.Render(text),
+			kind:     kindWork,
+			toolLive: true,
+			first:    pad + workDim.Render("↳ "),
+			cont:     pad + "  ",
+			text:     style.Render(text),
 		})
 		return *m, next
 
