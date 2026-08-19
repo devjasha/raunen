@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { ReleaseBadge } from "./ReleaseBadge";
 
 /** The install command, in one place: it appears on the home page and in the
  *  docs, and two copies that drift is how a wrong command reaches a user. */
@@ -16,6 +17,7 @@ export function Header() {
           raunen
         </Link>
         <nav>
+          <ReleaseBadge />
           <Link to="/docs">Docs</Link>
           <Link to="/cost">Cost</Link>
           <a className="opt" href={REPO}>

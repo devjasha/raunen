@@ -213,6 +213,65 @@ nav a.opt {
   }
 }
 
+/* A new release, announced in the navbar. Sized like a nav link so its arrival
+   does not shove the rest of the bar around. */
+.release-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 999px;
+  color: var(--fg-strong);
+  text-decoration: none;
+  font-size: 0.75rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease);
+}
+
+.release-badge:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+}
+
+.release-dot {
+  width: 0.45em;
+  height: 0.45em;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* The pulse is decoration; anyone who has asked for less motion gets none. */
+@media (prefers-reduced-motion: no-preference) {
+  .release-dot {
+    animation: release-pulse 2.4s var(--ease) infinite;
+  }
+}
+
+@keyframes release-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.release-new {
+  color: var(--fg-weak);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.625rem;
+}
+
+/* On a narrow screen the tag alone carries the news. */
+@media (max-width: 34rem) {
+  .release-new {
+    display: none;
+  }
+}
+
 /* ── hero ───────────────────────────────────────────────────────────── */
 
 .hero {
