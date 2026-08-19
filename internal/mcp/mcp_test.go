@@ -163,3 +163,70 @@ func TestToolAnnotationsDecodes(t *testing.T) {
 		t.Error("openWorldHint should decode to *true")
 	}
 }
+
+// Ping must succeed against a live mock server, confirming the connection is
+// healthy end to end.
+func TestPingSucceeds(t *testing.T) {
+	c := newMock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.Ping(ctx); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+}
+
+// Reload must rebuild the connection and return a fresh tool set whose "ping"
+// tool keeps its original shape.
+func TestReloadRestoresTools(t *testing.T) {
+	c := newMock(t)
+
+	before := findTool(t, c, "ping")
+	beforeDesc := before.Description
+	beforeMutates := before.Mutates
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tools, err := c.Reload(ctx)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	// The freshly discovered set should still contain the same tools.
+	if len(tools) != 2 {
+		t.Fatalf("reloaded tools = %d, want 2", len(tools))
+	}
+	reloaded := findTool(t, c, "ping")
+	if reloaded.Description != beforeDesc {
+		t.Errorf("reloaded ping description = %q, want %q", reloaded.Description, beforeDesc)
+	}
+	if reloaded.Mutates != beforeMutates {
+		t.Errorf("reloaded ping Mutates = %v, want %v", reloaded.Mutates, beforeMutates)
+	}
+
+	// And it must still round-trip a tool call after the restart.
+	out, err := reloaded.Run(ctx, json.RawMessage(`{"msg":"hi"}`))
+	if err != nil {
+		t.Fatalf("run after reload: %v", err)
+	}
+	if out != "pong: hi" {
+		t.Errorf("result after reload = %q, want %q", out, "pong: hi")
+	}
+}
+
+// After a manual restart, a tool call must still round-trip through the new
+// transport. This exercises the same rebuild path the lazy reconnect uses.
+func TestCallToolAfterRestart(t *testing.T) {
+	c := newMock(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.restart(ctx); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	out, err := c.Tools()[0].Run(ctx, json.RawMessage(`{"msg":"again"}`))
+	if err != nil {
+		t.Fatalf("run after restart: %v", err)
+	}
+	if out != "pong: again" {
+		t.Errorf("result = %q, want %q", out, "pong: again")
+	}
+}

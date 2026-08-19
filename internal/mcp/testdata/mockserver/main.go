@@ -41,6 +41,8 @@ func main() {
 				"capabilities":    map[string]any{},
 				"serverInfo":      map[string]any{"name": "mockserver"},
 			})
+		case "ping":
+			write(out, req.ID, map[string]any{})
 		case "tools/list":
 			write(out, req.ID, map[string]any{
 				"tools": []map[string]any{

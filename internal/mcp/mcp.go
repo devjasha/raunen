@@ -86,6 +86,7 @@ type spec struct {
 // tools discovered from it; Close stops the transport.
 type Client struct {
 	name string
+	s    Server
 	t    transport
 
 	tools []tools.Tool
@@ -121,7 +122,7 @@ func Start(ctx context.Context, name string, s Server) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{name: name, t: t}
+	c := &Client{name: name, t: t, s: s}
 	if err := c.initialize(ctx); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("mcp %q: %w", name, err)
@@ -150,6 +151,62 @@ func (c *Client) Capabilities() ServerCapabilities { return c.caps }
 // Close stops the server. The agent keeps running; its tools simply stop
 // answering.
 func (c *Client) Close() error { return c.t.close() }
+
+// Ping sends a JSON-RPC ping to the server and returns the error. A nil error
+// means the connection is live; a non-nil error means the transport is
+// dead/unreachable and the caller should consider restarting.
+func (c *Client) Ping(ctx context.Context) error {
+	return c.call(ctx, "ping", nil, &struct{}{})
+}
+
+// restart rebuilds the transport from the saved server config and re-runs the
+// handshake, re-discovering tools. It closes the old transport first so a
+// crashed/dead subprocess is released, then swaps in the new one. This is the
+// building block behind lazy reconnect and live tool refresh.
+func (c *Client) restart(ctx context.Context) error {
+	var nt transport
+	var err error
+	switch strings.ToLower(strings.TrimSpace(c.s.Type)) {
+	case "", "stdio":
+		if c.s.Command == "" {
+			return fmt.Errorf("mcp %q: no command", c.name)
+		}
+		nt, err = newStdio(c.name, c.s)
+	case "http":
+		if c.s.URL == "" {
+			return fmt.Errorf("mcp %q: http type requires a url", c.name)
+		}
+		nt, err = newHTTP(c.name, c.s)
+	default:
+		return fmt.Errorf("mcp %q: unknown type %q", c.name, c.s.Type)
+	}
+	if err != nil {
+		return err
+	}
+	// Release the old transport (guard against a nil one during early failures).
+	if c.t != nil {
+		_ = c.t.close()
+	}
+	c.t = nt
+	if err := c.initialize(ctx); err != nil {
+		nt.close()
+		return fmt.Errorf("mcp %q: %w", c.name, err)
+	}
+	if err := c.listTools(ctx); err != nil {
+		nt.close()
+		return fmt.Errorf("mcp %q: %w", c.name, err)
+	}
+	return nil
+}
+
+// Reload rebuilds the connection and returns a fresh set of tools after the
+// server reports tools/list_changed. It is the live-refresh entry point.
+func (c *Client) Reload(ctx context.Context) ([]tools.Tool, error) {
+	if err := c.restart(ctx); err != nil {
+		return nil, err
+	}
+	return c.Tools(), nil
+}
 
 func (c *Client) initialize(ctx context.Context) error {
 	res := struct {
@@ -189,6 +246,10 @@ func (c *Client) listTools(ctx context.Context) error {
 	if res.Error != nil {
 		return res.Error
 	}
+	// Replace the tool set rather than appending, so a reload (after a restart or
+	// a tools/list_changed notification) reflects the server's current tools
+	// exactly, instead of duplicating the previous set.
+	c.tools = c.tools[:0]
 	for _, t := range res.Tools {
 		schema := t.InputSchema
 		if schema == nil {
@@ -234,10 +295,22 @@ func (c *Client) callTool(ctx context.Context, name string, args json.RawMessage
 		} `json:"content"`
 		IsError bool `json:"isError"`
 	}{}
-	if err := c.call(ctx, "tools/call", map[string]any{
+	// Issue the call. If it fails because the transport is dead or unreachable,
+	// attempt exactly ONE restart and retry once — no loop. This keeps a crashed
+	// stdio server or a dropped HTTP connection from failing the turn outright.
+	err := c.call(ctx, "tools/call", map[string]any{
 		"name":      name,
 		"arguments": args,
-	}, &res); err != nil {
+	}, &res)
+	if isTransportError(err) {
+		if rerr := c.restart(ctx); rerr == nil {
+			err = c.call(ctx, "tools/call", map[string]any{
+				"name":      name,
+				"arguments": args,
+			}, &res)
+		}
+	}
+	if err != nil {
 		return "", err
 	}
 	if res.Error != nil {
@@ -290,3 +363,16 @@ type rpcError struct {
 }
 
 func (e *rpcError) Error() string { return e.Message }
+
+// isTransportError reports whether err looks like a transport-level failure
+// (dead/unreachable connection) rather than a tool or protocol error. We detect
+// via substring on the error string so the transport interface need not change.
+func isTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "closed") ||
+		strings.Contains(msg, "connection") ||
+		strings.Contains(msg, "server exited")
+}
