@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"raunen/internal/provider"
 	"raunen/internal/tools"
@@ -78,5 +81,50 @@ func TestEnablingSubagentsInvalidatesSchemaCost(t *testing.T) {
 	after := a.overhead()
 	if after <= before {
 		t.Errorf("overhead = %d after adding a tool, want more than %d", after, before)
+	}
+}
+
+// A fork answers a turn beside the conversation, and the conversation itself
+// never runs — so its event channel is nil. A task tool inherited by pointer
+// would still be bound to it, and delegating would block on that nil channel
+// forever, past any cancellation. The fork must carry its own.
+func TestForkDelegatesOntoItsOwnChannel(t *testing.T) {
+	a := withSubagents(t)
+	f := a.Fork()
+
+	tool, ok := f.tools.Get("task")
+	if !ok {
+		t.Fatal("the fork did not inherit the task tool")
+	}
+
+	out := make(chan Event, 8)
+	f.out = out
+
+	go func() {
+		_, _ = tool.Run(context.Background(), json.RawMessage(`{"description":"d","prompt":"p"}`))
+	}()
+
+	select {
+	case ev := <-out:
+		if _, ok := ev.(TaskStart); !ok {
+			t.Fatalf("first event was %T, want TaskStart", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("delegating from a fork blocked: nothing reached the fork's channel")
+	}
+}
+
+// Rebuilding the task tool for a fork must not reach back into the registry the
+// conversation is still using, or every fork would add another copy.
+func TestForkDoesNotMutateTheParentRegistry(t *testing.T) {
+	a := withSubagents(t)
+	before := a.tools.Names()
+	a.Fork()
+	a.Fork()
+	if got := a.tools.Names(); len(got) != len(before) {
+		t.Errorf("forking changed the conversation's registry: %v -> %v", before, got)
+	}
+	if a.tools == a.Fork().tools {
+		t.Error("the fork shares the conversation's registry, so its task tool is the wrong one")
 	}
 }

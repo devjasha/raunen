@@ -441,7 +441,7 @@ func (a *Agent) Messages() []provider.Message { return a.messages }
 // two overlapping turns reaching a mutating tool ask the one keyboard one
 // question at a time rather than both at once.
 func (a *Agent) Fork() *Agent {
-	return &Agent{
+	f := &Agent{
 		client:        a.client,
 		tools:         a.tools,
 		system:        a.system,
@@ -455,6 +455,17 @@ func (a *Agent) Fork() *Agent {
 		parent:        a,
 		messages:      append([]provider.Message(nil), a.messages...),
 	}
+	// The task tool is the one tool bound to an agent rather than to the
+	// working directory: it emits the sub-agent's events on the channel of the
+	// agent it was built for. Inheriting the registry by pointer would leave the
+	// fork delegating onto the conversation's channel, which is nil because the
+	// conversation never runs — a send that blocks forever, and one no
+	// cancellation can reach. So the fork gets its own, built against itself.
+	if a.tools.Has("task") {
+		f.tools = a.tools.Without("task")
+		f.EnableSubagents()
+	}
+	return f
 }
 
 // Merge folds a finished fork's exchange back into the conversation it came
