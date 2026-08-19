@@ -22,6 +22,7 @@ import { Route as DocsModelsRouteImport } from './routes/docs/models'
 import { Route as DocsModesRouteImport } from './routes/docs/modes'
 import { Route as DocsSubagentsRouteImport } from './routes/docs/subagents'
 import { Route as DocsTmuxRouteImport } from './routes/docs/tmux'
+import { Route as DocsWisprFlowRouteImport } from './routes/docs/wispr-flow'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -88,6 +89,11 @@ const DocsTmuxRoute = DocsTmuxRouteImport.update({
   path: '/tmux',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsWisprFlowRoute = DocsWisprFlowRouteImport.update({
+  id: '/wispr-flow',
+  path: '/wispr-flow',
+  getParentRoute: () => DocsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -102,6 +108,7 @@ export interface FileRoutesByFullPath {
   '/docs/modes': typeof DocsModesRoute
   '/docs/subagents': typeof DocsSubagentsRoute
   '/docs/tmux': typeof DocsTmuxRoute
+  '/docs/wispr-flow': typeof DocsWisprFlowRoute
   '/docs/': typeof DocsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -116,6 +123,7 @@ export interface FileRoutesByTo {
   '/docs/modes': typeof DocsModesRoute
   '/docs/subagents': typeof DocsSubagentsRoute
   '/docs/tmux': typeof DocsTmuxRoute
+  '/docs/wispr-flow': typeof DocsWisprFlowRoute
   '/docs': typeof DocsIndexRoute
 }
 export interface FileRoutesById {
@@ -132,6 +140,7 @@ export interface FileRoutesById {
   '/docs/modes': typeof DocsModesRoute
   '/docs/subagents': typeof DocsSubagentsRoute
   '/docs/tmux': typeof DocsTmuxRoute
+  '/docs/wispr-flow': typeof DocsWisprFlowRoute
   '/docs/': typeof DocsIndexRoute
 }
 export interface FileRouteTypes {
@@ -149,6 +158,7 @@ export interface FileRouteTypes {
     | '/docs/modes'
     | '/docs/subagents'
     | '/docs/tmux'
+    | '/docs/wispr-flow'
     | '/docs/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -163,6 +173,7 @@ export interface FileRouteTypes {
     | '/docs/modes'
     | '/docs/subagents'
     | '/docs/tmux'
+    | '/docs/wispr-flow'
     | '/docs'
   id:
     | '__root__'
@@ -178,6 +189,7 @@ export interface FileRouteTypes {
     | '/docs/modes'
     | '/docs/subagents'
     | '/docs/tmux'
+    | '/docs/wispr-flow'
     | '/docs/'
   fileRoutesById: FileRoutesById
 }
@@ -280,6 +292,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsTmuxRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/wispr-flow': {
+      id: '/docs/wispr-flow'
+      path: '/wispr-flow'
+      fullPath: '/docs/wispr-flow'
+      preLoaderRoute: typeof DocsWisprFlowRouteImport
+      parentRoute: typeof DocsRoute
+    }
   }
 }
 
@@ -293,6 +312,7 @@ interface DocsRouteChildren {
   DocsModesRoute: typeof DocsModesRoute
   DocsSubagentsRoute: typeof DocsSubagentsRoute
   DocsTmuxRoute: typeof DocsTmuxRoute
+  DocsWisprFlowRoute: typeof DocsWisprFlowRoute
   DocsIndexRoute: typeof DocsIndexRoute
 }
 
@@ -306,6 +326,7 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsModesRoute: DocsModesRoute,
   DocsSubagentsRoute: DocsSubagentsRoute,
   DocsTmuxRoute: DocsTmuxRoute,
+  DocsWisprFlowRoute: DocsWisprFlowRoute,
   DocsIndexRoute: DocsIndexRoute,
 }
 

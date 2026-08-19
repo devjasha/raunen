@@ -61,6 +61,10 @@ function Overview() {
           with <code>prefix + R</code>.
         </li>
         <li>
+          <Link to="/docs/wispr-flow">Wispr Flow</Link> — dictate prompts straight
+          into raunen's input box.
+        </li>
+        <li>
           <Link to="/cost">What it costs</Link> — free, and how to keep it that
           way.
         </li>
