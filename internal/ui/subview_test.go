@@ -40,8 +40,8 @@ func TestSubViewHintFits(t *testing.T) {
 	}
 }
 
-// TestSubViewToggle covers the key's contract: it opens and closes, and does
-// nothing at all when no sub-agent is running.
+// TestSubViewToggle covers the key's contract: one press opens a preview, a
+// second expands it, and it does nothing at all when no sub-agent is running.
 func TestSubViewToggle(t *testing.T) {
 	m := testModel(t)
 	before := m.viewHeight()
@@ -56,13 +56,23 @@ func TestSubViewToggle(t *testing.T) {
 	m.subs[0].add("⏺ read x")
 	ret, _ := m.onKey(keyPress("ctrl+o"))
 	m = ret.(Model)
-	if m.watching != "t1" {
-		t.Errorf("ctrl+o did not open the panel, watching=%q", m.watching)
+	if m.watching != "t1" || m.expanded {
+		t.Errorf("ctrl+o did not open a preview, watching=%q expanded=%v", m.watching, m.expanded)
 	}
 	if m.viewHeight() >= before {
 		t.Error("opening the panel did not take rows from the transcript")
 	}
 
+	ret, _ = m.onKey(keyPress("ctrl+o"))
+	m = ret.(Model)
+	if m.watching != "t1" || !m.expanded {
+		t.Errorf("ctrl+o did not expand the panel, watching=%q expanded=%v", m.watching, m.expanded)
+	}
+	if m.viewHeight() >= before {
+		t.Error("expanding the panel did not take more rows from the transcript")
+	}
+
+	// A third press closes the panel and gives the rows back.
 	ret, _ = m.onKey(keyPress("ctrl+o"))
 	m = ret.(Model)
 	if m.watching != "" {
@@ -74,19 +84,33 @@ func TestSubViewToggle(t *testing.T) {
 }
 
 // TestSubViewCyclesThroughSiblings covers the key with several running: it
-// steps through them in order and the press after the last closes the panel, so
-// one key means both "look" and "look at the other one".
+// previews each in turn, expands, then moves to the next, and the press after
+// the last closes the panel — so one key means both "look" and "look at the
+// other one".
 func TestSubViewCyclesThroughSiblings(t *testing.T) {
 	m := testModel(t)
 	for _, id := range []string{"t1", "t2", "t3"} {
 		m.subs = append(m.subs, &subView{id: id, desc: id})
 	}
 
-	for _, want := range []string{"t1", "t2", "t3", ""} {
+	type step struct {
+		w string
+		e bool
+	}
+	for _, want := range []step{
+		{"t1", false},
+		{"t1", true},
+		{"t2", false},
+		{"t2", true},
+		{"t3", false},
+		{"t3", true},
+		{"", false},
+	} {
 		ret, _ := m.onKey(keyPress("ctrl+o"))
 		m = ret.(Model)
-		if m.watching != want {
-			t.Fatalf("watching=%q, want %q", m.watching, want)
+		if m.watching != want.w || m.expanded != want.e {
+			t.Fatalf("after press: watching=%q(%v), want %q(%v)",
+				m.watching, m.expanded, want.w, want.e)
 		}
 	}
 }

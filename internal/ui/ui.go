@@ -62,7 +62,6 @@ var (
 	thinkStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
 	askStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
 	barStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
-	taskStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 
 	// Working-out — tool calls, their results, delegated tasks — is rendered
 	// faint so it sits behind the conversation rather than beside it. A
@@ -269,6 +268,9 @@ type Model struct {
 	// panel is closed. Kept as an id rather than an index so a sibling
 	// finishing does not shift what is being watched.
 	watching string
+	// expanded is whether the watched panel is open to its full window
+	// (steps and answer) rather than the small preview of the tail.
+	expanded bool
 	// keyAsk is the API key prompt, open only while asking.
 	keyAsk *keyPrompt
 	// pick is the model chooser overlay, open only while choosing.
@@ -841,7 +843,7 @@ func (m Model) viewHeight() int {
 		h -= m.keyAsk.height()
 	}
 	if w := m.watched(); w != nil {
-		h -= w.height()
+		h -= w.height(m.expanded, m.height-chromeLines-1)
 	}
 	if m.sug != nil {
 		h -= m.sug.height()
@@ -1266,19 +1268,24 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "ctrl+o":
-		// Open or close the sub-agent panel. Doing nothing when none is running
-		// is deliberate: the key means "show me the sub-agent", and inventing
+		// One key cycles a sub-agent's window closed → preview → expanded →
+		// the next one (or closed). Doing nothing when none is running is
+		// deliberate: the key means "show me the sub-agent", and inventing
 		// something for it to do when there isn't one would only surprise.
-		// With several running, the key steps through them and then closes:
-		// watch the first, the second, … and the press after the last puts the
-		// panel away. One key covers both "look" and "look at the other one".
 		switch {
 		case len(m.subs) == 0:
 			// Nothing running. Inventing something for the key to do here would
 			// only surprise.
 		case m.watching == "":
+			// Closed → preview of the first running sub-agent.
 			m.watching = m.subs[0].id
+			m.expanded = false
+		case !m.expanded:
+			// Preview → expanded window (steps and, once done, the answer).
+			m.expanded = true
 		default:
+			// Expanded → next sub-agent's preview, or closed after the last.
+			m.expanded = false
 			i := 0
 			for j, s := range m.subs {
 				if s.id == m.watching {
@@ -1652,7 +1659,7 @@ func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
 		}
 		if s := m.sub(e.Task); s != nil {
 			s.steps++
-			s.add(toolStyle.Render("⏺ "+e.Name) +
+			s.add(s.paint("⏺ "+e.Name) +
 				dimStyle.Render("  "+summarize(e.Args, max(10, m.innerWidth()-len(e.Name)-14))))
 			return *m, next
 		}
@@ -1686,7 +1693,7 @@ func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
 			text, style = e.Err.Error(), workErr
 		}
 		if s := m.sub(e.Task); s != nil {
-			s.add("  " + workDim.Render("↳ ") + style.Render(text))
+			s.add("  " + s.paint("↳ ") + style.Render(text))
 			return *m, next
 		}
 		pad := strings.Repeat("  ", 2+e.Depth)
@@ -1704,27 +1711,42 @@ func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
 		m.settle(t)
 		// The panel opens here and takes the sub-agent's steps from now on. It
 		// is tagged with the turn that delegated it, so it closes when that
-		// turn ends rather than when any turn does.
-		m.subs = append(m.subs, &subView{id: e.ID, desc: e.Description, owner: t})
+		// turn ends rather than when any turn does. The colour is assigned from
+		// the sub-agent palette and reused on the panel, its live lines, and the
+		// two transcript markers, so several running at once are told apart by
+		// colour rather than by where they sit.
+		s := &subView{id: e.ID, desc: e.Description, owner: t, color: nextSubColor()}
+		m.subs = append(m.subs, s)
 		m.pushTurn(t, entry{
 			kind:  kindWork,
-			first: "  " + taskStyle.Render("◆ "),
+			first: "  " + s.paint("◆ "),
 			cont:  "    ",
-			text:  taskStyle.Render("task") + workDim.Render("  "+e.Description),
+			text:  s.paint("task") + workDim.Render("  "+e.Description),
 		})
 		return *m, next
 
 	case agent.TaskEnd:
-		// The panel collapses, leaving one line in the transcript. What the
-		// sub-agent did was working-out, not conversation.
-		m.dropSub(e.ID)
+		// The panel does not close here: the sub-agent has reported back and
+		// its answer is worth keeping in the panel, not dropping the instant
+		// it finishes. The transcript still gets its one lightweight line -- the
+		// caller wanted an answer, not a record of the working-out -- but it is
+		// recoloured to this sub-agent so it is told from its siblings.
+		if s := m.sub(e.ID); s != nil {
+			s.done = true
+			s.answer = e.Summary
+			s.err = e.Err
+		}
 		text, style := fmt.Sprintf("returned %d chars after %d steps", len(e.Summary), e.Steps), workDim
 		if e.Err != nil {
 			text, style = e.Err.Error(), workErr
 		}
+		mark := "↳ "
+		if s := m.sub(e.ID); s != nil {
+			mark = s.paint("↳ ")
+		}
 		m.pushTurn(t, entry{
 			kind:  kindWork,
-			first: "    " + workDim.Render("↳ "),
+			first: "    " + mark,
 			cont:  "      ",
 			text:  style.Render(text),
 		})
@@ -2287,7 +2309,9 @@ func (m Model) View() tea.View {
 				break
 			}
 		}
-		rows = append(rows, strings.Split(w.render(m.innerWidth(), f, i, len(m.subs)), "\n")...)
+		rows = append(rows, strings.Split(
+			w.render(m.innerWidth(), f, i, len(m.subs), w.height(m.expanded, m.height-chromeLines-1), m.expanded),
+			"\n")...)
 	}
 	if m.pick != nil {
 		// What counts as "current" depends on what is being chosen: the dot
@@ -2382,7 +2406,7 @@ func (m Model) View() tea.View {
 	if m.pick != nil {
 		cur := tea.NewCursor(padX+1+m.pick.cursorCol(), m.viewHeight()+1)
 		if w := m.watched(); w != nil {
-			cur.Y += w.height()
+			cur.Y += w.height(m.expanded, m.height-chromeLines-1)
 		}
 		v.Cursor = cur
 		return v
@@ -2394,7 +2418,7 @@ func (m Model) View() tea.View {
 			// the two heading rows inside it.
 			cur.Y += m.viewHeight() + 1 + 3
 			if w := m.watched(); w != nil {
-				cur.Y += w.height()
+				cur.Y += w.height(m.expanded, m.height-chromeLines-1)
 			}
 			cur.X += boxPadX + 1 + padX
 			v.Cursor = cur
@@ -2408,7 +2432,7 @@ func (m Model) View() tea.View {
 			below++
 		}
 		if w := m.watched(); w != nil {
-			below += w.height()
+			below += w.height(m.expanded, m.height-chromeLines-1)
 		}
 		if m.pick != nil {
 			below += m.pick.height()
