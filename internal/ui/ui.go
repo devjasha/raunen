@@ -741,7 +741,26 @@ func (m *Model) push(e entry) {
 // live until it is superseded by the next, and nothing is appended after it
 // but the next step or the prose that ends the turn.
 func (m *Model) dropLive() {
+	dropped := false
 	for len(m.entries) > 0 && m.entries[len(m.entries)-1].toolLive {
+		m.entries = m.entries[:len(m.entries)-1]
+		dropped = true
+	}
+	// The blank lines in front of the step were opened to separate it from what
+	// came before — one for the change of kind, another when a second turn was
+	// writing — so they belong to the step and leave with it. Kept, they would
+	// sit there unclaimed: lastKind and lastTurn both read straight through a
+	// blank, so the next step sees the same prose, asks for the same separation
+	// again, and the live line walks one row further down the screen with every
+	// tool call. Whatever the replacement needs, pushTurn and pushKind decide
+	// again from what is left.
+	//
+	// A rule is not a separator of this kind: it opens a turn, carries the
+	// time, and only looks blank because it holds no text of its own.
+	for dropped && len(m.entries) > 0 {
+		if last := m.entries[len(m.entries)-1]; !last.blankLine() || last.rule {
+			break
+		}
 		m.entries = m.entries[:len(m.entries)-1]
 	}
 	m.rewrap()
