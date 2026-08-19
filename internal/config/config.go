@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -93,6 +94,16 @@ type Config struct {
 	// but idle; the empty list means "start every defined server".
 	EnabledMCP []string `json:"mcp_enabled,omitempty"`
 
+	// Skills are reusable pieces of prompt, keyed by the name they are referenced
+	// by. They are read from skills.json beside this file and never written back
+	// into it, which is why the field carries no JSON name: a skill is a
+	// paragraph of prose and sometimes a page of it, and a page of prose in
+	// config.json buries the handful of settings that decide which model runs.
+	// The same reasoning that gave MCP servers their own file applies here, from
+	// the other direction — a config is personal and holds keys, while a set of
+	// skills is the part worth handing to someone else.
+	Skills map[string]Skill `json:"-"`
+
 	// file is where this config was read from, so it can be written back.
 	file string `json:"-"`
 }
@@ -115,6 +126,168 @@ type MCP struct {
 	// Headers are extra HTTP headers for an http server, e.g. an Authorization
 	// bearer token. Forwarded verbatim on every request.
 	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// Skill is a named piece of prompt kept out of the conversation until it is
+// asked for. The instructions people repeat — a review checklist, a house style,
+// the way commit messages are written here — are too long to retype and too
+// situational to live in the system prompt, where they would be paid for on
+// every turn of every session.
+type Skill struct {
+	// Description is the one line shown while completing a name. It is never
+	// sent to the model: it describes the skill to the person choosing it, and
+	// the model is given the skill itself.
+	Description string `json:"description,omitempty"`
+	// Prompt is what is injected when the skill is referenced.
+	Prompt string `json:"prompt"`
+}
+
+// SkillNames lists the defined skills in a stable order, so a list of them does
+// not reshuffle between one look and the next the way ranging a map would.
+func (c *Config) SkillNames() []string {
+	out := make([]string, 0, len(c.Skills))
+	for name := range c.Skills {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Skill looks a skill up by name. Matching is case-insensitive because the name
+// is typed mid-sentence, where a capital at the start of one is a typing habit
+// rather than a different skill.
+func (c *Config) Skill(name string) (Skill, bool) {
+	if s, ok := c.Skills[name]; ok {
+		return s, true
+	}
+	for n, s := range c.Skills {
+		if strings.EqualFold(n, name) {
+			return s, true
+		}
+	}
+	return Skill{}, false
+}
+
+// SkillMark is what starts a skill reference in a prompt. It is a sigil of its
+// own rather than a second meaning for @, which already names a file: the two
+// are completed and expanded differently, and a reference whose meaning depends
+// on whether a file happens to share the name would be unpredictable.
+const SkillMark = "#"
+
+// ExpandSkills rewrites a message for the model, appending the prompt of every
+// skill it referenced and reporting which were used. The message itself is left
+// as it was typed: splicing a page of instructions into the middle of a sentence
+// reads as neither one thing nor the other, and the transcript would no longer
+// show what the user wrote.
+//
+// A reference to an undefined skill is left alone. It is far more likely to be a
+// heading, an issue number or a colour than a typo, and rewriting prose that was
+// never a reference is worse than ignoring one that was.
+func (c *Config) ExpandSkills(text string) (string, []string) {
+	if len(c.Skills) == 0 {
+		return text, nil
+	}
+	var used []string
+	seen := map[string]bool{}
+	var b strings.Builder
+	b.WriteString(text)
+	for _, name := range skillRefs(text) {
+		s, ok := c.Skill(name)
+		if !ok || seen[strings.ToLower(name)] {
+			// A skill mentioned twice is still one set of instructions. Sending
+			// it twice would only spend context saying the same thing.
+			continue
+		}
+		seen[strings.ToLower(name)] = true
+		used = append(used, name)
+		// Labelled rather than run together, so that with two skills in one
+		// message the model can tell where one set of instructions ends.
+		b.WriteString("\n\n[skill: " + name + "]\n" + strings.TrimSpace(s.Prompt))
+	}
+	return b.String(), used
+}
+
+// skillRefs are the names referenced in a message, in the order they appear.
+// A reference is a word starting with the mark, so an address or a fragment of a
+// URL cannot become one; trailing punctuation is dropped, since a skill named at
+// the end of a sentence is followed by a full stop far more often than not.
+func skillRefs(text string) []string {
+	var out []string
+	for _, f := range strings.Fields(text) {
+		name, ok := strings.CutPrefix(f, SkillMark)
+		if !ok {
+			continue
+		}
+		name = strings.TrimRight(name, ".,;:!?)\"'")
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// SkillsPath is where skills are stored, beside the config rather than in it.
+// See Config.Skills for why they are kept apart.
+func SkillsPath() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "raunen", "skills.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "raunen-skills.json"
+	}
+	return filepath.Join(home, ".config", "raunen", "skills.json")
+}
+
+// LoadSkills reads the skill definitions, writing a starter file if none
+// exists. Like LoadMCP it stands apart from Load: the file has its own reason to
+// be edited, and a session with no skills in it should still start.
+func LoadSkills() (map[string]Skill, error) {
+	path := SkillsPath()
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		starter := map[string]Skill{}
+		if err := writeSkills(path, starter); err != nil {
+			return nil, err
+		}
+		return starter, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]Skill
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	out := make(map[string]Skill, len(m))
+	for name, s := range m {
+		// A skill is referenced as one word in a prompt, so a name with a space
+		// in it could never be typed. Dropping it is kinder than offering a name
+		// that does nothing when used, and the file says what the name is.
+		if name == "" || strings.ContainsAny(name, " \t\n") {
+			continue
+		}
+		out[name] = s
+	}
+	return out, nil
+}
+
+func writeSkills(path string, m map[string]Skill) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // SetKey stores an API key for a provider and writes the config out. The key

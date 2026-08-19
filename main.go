@@ -56,6 +56,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Skills live in their own file, so a broken one is reported and skipped
+	// rather than taken as a reason not to start: a prompt that cannot be
+	// expanded is survivable in a way that a missing model is not.
+	if skills, err := config.LoadSkills(); err != nil {
+		fmt.Fprintln(os.Stderr, "raunen: skills not loaded —", err)
+	} else {
+		cfg.Skills = skills
+	}
 
 	root, err := os.Getwd()
 	if err != nil {
@@ -140,7 +148,11 @@ func run() error {
 	// A prompt on the command line runs one turn and exits, which keeps the
 	// tool usable in pipes and scripts.
 	if args := flag.Args(); len(args) > 0 {
-		return oneShot(ag, strings.Join(args, " "))
+		// Expanded here as well as in the UI, so a skill is worth defining for
+		// the scripted case too — that is where the same instructions are most
+		// often repeated.
+		prompt, _ := cfg.ExpandSkills(strings.Join(args, " "))
+		return oneShot(ag, prompt)
 	}
 
 	// Announce this instance so a picker can find it; tmux cannot, since it

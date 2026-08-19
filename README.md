@@ -195,7 +195,8 @@ raunen -version                     # print the version
 | `shift+enter` / `alt+enter` | newline without sending |
 | `tab` | cycle auto / accept edits / plan, or take the highlighted completion |
 | `@` | mark a file or folder in the prompt |
-| `↑` / `↓` | move through the completions while typing `/` or `@` |
+| `#` | pull a saved skill into the prompt |
+| `↑` / `↓` | move through the completions while typing `/`, `@` or `#` |
 | `esc` | cancel the running turn, or drop a pending reply |
 | `ctrl+o` | watch a running sub-agent, or step to the next |
 | `ctrl+c` | cancel if working, otherwise quit |
@@ -226,6 +227,9 @@ The mention goes to the model as the path it names. Nothing is inlined — the
 agent has tools to read what it was pointed at, and choosing what to read out of
 a folder is exactly the sort of thing it is for.
 
+`#` completes the skills you have saved — instructions you would otherwise
+retype — and sends them along with the message. See [Skills](#skills).
+
 | Command | |
 |---|---|
 | `/model` | choose a model from a list |
@@ -237,6 +241,7 @@ a folder is exactly the sort of thing it is for.
 | `/companion` | your dragon's level and what fed it |
 | `/prestige` | start a new climb once your dragon is fully grown |
 | `/providers` | list configured endpoints |
+| `/skills` | list the skills you can reference with `#` |
 | `/key <provider>` | add an API key |
 | `/sessions` | list saved sessions |
 | `/resume <id>` | pick up a saved session |
@@ -577,6 +582,65 @@ Enabling the mouse has a cost worth stating: click-drag selection now goes to
 raunen rather than to your terminal. On the alternate screen that was already
 limited, and `pgup`/`pgdn` still work, but it is a trade rather than a free win.
 
+## Skills
+
+A skill is a piece of prompt you have saved under a name. The instructions
+people repeat — a review checklist, a house style, the way commit messages are
+written here — are too long to retype and too situational to put in the system
+prompt, where you would pay for them on every turn of every session.
+
+`~/.config/raunen/skills.json`, written empty on first run:
+
+```json
+{
+  "review": {
+    "description": "review checklist",
+    "prompt": "Check for data races, unhandled errors and missing tests. Say what you would change and why, and do not change it yourself."
+  },
+  "commit": {
+    "description": "house commit style",
+    "prompt": "Imperative mood, lower case, no full stop, under 72 characters. Explain why in the body if it is not obvious."
+  }
+}
+```
+
+Reference one with `#` and it goes to the model with your message:
+
+```
+  ──────────────────────────────────────────────────── 11:41
+  ▌ #review the diff on this branch
+    # review
+
+  Three things worth changing …
+```
+
+Typing `#` opens the list the way `/` and `@` do, narrowed as you go, with the
+description beside each name; `tab` takes the highlighted one. A bare `#` lists
+everything, so the skills are discoverable without having to remember what you
+called them. `/skills` prints the same list.
+
+`description` is for you, not for the model — it is what tells one name from
+another while you are choosing. `prompt` is what is sent.
+
+**The reference stays in the transcript; the prompt does not.** The skill is
+appended to the message on its way out, labelled `[skill: review]` so the model
+can tell where one set of instructions ends when a message names two. What you
+see on screen is what you typed, plus a dim line naming the skills that went
+with it. A page of house style redrawn into the conversation every time it is
+used would bury the conversation it is about, and the dim line is there because
+without it there would be no way to tell a skill that was pulled in from a name
+that was misspelled and quietly went to the model as prose.
+
+**A name that is not a skill is left alone.** `#4213`, `#heading` and
+`example.com/x#review` are all far more likely to be what they look like than a
+typo, and rewriting prose that was never a reference is worse than ignoring one
+that was. Naming the same skill twice in a message sends it once.
+
+Skills live in their own file rather than in `config.json`, for the same reason
+MCP servers do — from the other direction. A config is personal, holds API keys
+and is a handful of settings about which model runs; a set of skills is prose,
+sometimes a page of it, and is the part worth handing to someone else.
+
 ## The companion
 
 The dragon is not decoration: it grows on the one thing every provider charges
@@ -714,6 +778,12 @@ assumes a particular model is installed.
 Providers added to the defaults in later versions are merged into an existing
 config on load, so new endpoints appear without a rewrite. Anything you have
 edited is left alone.
+
+Two things live beside it rather than in it: `mcp.json` for MCP servers, whose
+definitions can carry a token in their env, and `skills.json` for saved prompts,
+which are prose and would bury the settings above. Both are written empty on
+first run, and a broken one is reported and skipped rather than taken as a
+reason not to start.
 
 ### Context windows
 
@@ -1295,7 +1365,7 @@ resize — wrapping is redone at the new width rather than baked in.
 main.go                    CLI entry, one-shot mode
 internal/agent             the tool-use loop, modes, compaction and trimming
 internal/companion         the mascot's progress across sessions
-internal/config            providers and models
+internal/config            providers, models and skills
 internal/provider          OpenAI-compatible streaming client
 internal/session           saving, resuming, running instances
 internal/tools             bash, read, write, edit, list

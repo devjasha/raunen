@@ -998,7 +998,7 @@ func (m *Model) refreshSuggest() tea.Cmd {
 		return nil
 	}
 	prev := m.sug
-	m.sug = suggestFor(v, caret, m.files)
+	m.sug = suggestFor(v, caret, m.files, m.cfg)
 	// Keep the highlight on the same entry where it still exists, so narrowing
 	// the list does not move the selection out from under the user.
 	if prev != nil && m.sug != nil {
@@ -1578,6 +1578,11 @@ func (m *Model) send(text string) (tea.Model, tea.Cmd) {
 		q.WriteString("\n" + text)
 		sent = q.String()
 	}
+	// A skill named in the message brings its instructions with it. Expanded on
+	// the way out only: the transcript keeps the short reference the user typed,
+	// which is the point of having one — a page of house style pasted into the
+	// screen every time it is used would bury the conversation it is about.
+	sent, skills := m.cfg.ExpandSkills(sent)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.turnSeq++
 	// Every turn answers in a fork, including one asked with nothing else
@@ -1621,6 +1626,16 @@ func (m *Model) send(text string) (tea.Model, tea.Cmd) {
 	go t.ag.Run(ctx, sent, t.events)
 
 	m.openTurn(t, text, quote)
+	// Said out loud, because everything else about the expansion is invisible:
+	// the transcript shows the reference rather than the instructions, so
+	// without this there is no way to tell a skill that was pulled in from a
+	// name that was misspelled and quietly went to the model as prose.
+	if len(skills) > 0 {
+		m.pushTurn(t, entry{
+			kind: kindNotice,
+			text: dimStyle.Render("  " + skillMark + " " + strings.Join(skills, ", ")),
+		})
+	}
 	return *m, tea.Batch(waitFor(t, t.events), tick())
 }
 
@@ -2258,6 +2273,10 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 
 	case "/mcp":
 		return *m, m.showMCP()
+
+	case "/skills":
+		m.showSkills()
+		return *m, nil
 
 	case "/help":
 		// Printed from the same table the completion list offers, so what is

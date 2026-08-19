@@ -44,7 +44,7 @@ func TestSuggestOnlyForCommands(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := suggestFor(tt.line, caretEnd(tt.line), nil) != nil
+		got := suggestFor(tt.line, caretEnd(tt.line), nil, nil) != nil
 		if got != tt.open {
 			t.Errorf("suggestFor(%q) open = %v, want %v", tt.line, got, tt.open)
 		}
@@ -66,7 +66,7 @@ func TestSuggestMatches(t *testing.T) {
 		{
 			name: "prefix narrows",
 			line: "/s",
-			want: []string{"/status", "/sessions"},
+			want: []string{"/status", "/sessions", "/skills"},
 		},
 		{
 			// The canonical name is what gets offered, so the alias teaches it.
@@ -83,7 +83,7 @@ func TestSuggestMatches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := suggestFor(tt.line, caretEnd(tt.line), nil)
+			s := suggestFor(tt.line, caretEnd(tt.line), nil, nil)
 			if s == nil {
 				t.Fatalf("suggestFor(%q) offered nothing", tt.line)
 			}
@@ -113,7 +113,7 @@ func TestSuggestMatches(t *testing.T) {
 func TestMentionCompletesTheLastWord(t *testing.T) {
 	idx := indexOf("main.go", "internal/ui/ui.go")
 
-	s := suggestFor("have a look at @ui.go", caretEnd("have a look at @ui.go"), idx)
+	s := suggestFor("have a look at @ui.go", caretEnd("have a look at @ui.go"), idx, nil)
 	if s == nil {
 		t.Fatal("a mention offered nothing")
 	}
@@ -138,7 +138,7 @@ func TestMentionCompletesTheLastWord(t *testing.T) {
 func TestMentionKeepsGoingIntoAFolder(t *testing.T) {
 	idx := indexOf("internal/ui/ui.go")
 
-	s := suggestFor("@internal", caretEnd("@internal"), idx)
+	s := suggestFor("@internal", caretEnd("@internal"), idx, nil)
 	it, ok := s.selected()
 	if !ok {
 		t.Fatal("no selection")
@@ -151,7 +151,7 @@ func TestMentionKeepsGoingIntoAFolder(t *testing.T) {
 	}
 
 	// And the completed folder lists what is inside it.
-	inside := suggestFor("@internal/", caretEnd("@internal/"), idx)
+	inside := suggestFor("@internal/", caretEnd("@internal/"), idx, nil)
 	if inside == nil || inside.items[0].insert != "@internal/ui/" {
 		t.Fatalf("stepping into a folder offered %v", names(inside))
 	}
@@ -160,7 +160,7 @@ func TestMentionKeepsGoingIntoAFolder(t *testing.T) {
 // The tree is scanned in the background, so the first mention arrives before
 // the paths do. It has to say so rather than look like nothing matched.
 func TestMentionSaysWhenStillScanning(t *testing.T) {
-	s := suggestFor("@ui", caretEnd("@ui"), nil)
+	s := suggestFor("@ui", caretEnd("@ui"), nil, nil)
 	if s == nil {
 		t.Fatal("a mention with no index offered nothing at all")
 	}
@@ -192,7 +192,7 @@ func TestAcceptSuggestSplicesTheToken(t *testing.T) {
 			ta.SetValue(tt.typed)
 
 			m := Model{input: ta, files: indexOf("main.go", "internal/ui/ui.go")}
-			m.sug = suggestFor(tt.typed, caretEnd(tt.typed), m.files)
+			m.sug = suggestFor(tt.typed, caretEnd(tt.typed), m.files, nil)
 			if m.sug == nil {
 				t.Fatalf("%q offered nothing to accept", tt.typed)
 			}
@@ -216,7 +216,7 @@ func names(s *suggest) []string {
 // The cursor wraps rather than sticking at either end, so a list of three is
 // reachable in either direction.
 func TestSuggestMoveWraps(t *testing.T) {
-	s := suggestFor("/s", caretEnd("/s"), nil)
+	s := suggestFor("/s", caretEnd("/s"), nil, nil)
 	s.move(-1)
 	if s.cursor != len(s.items)-1 {
 		t.Errorf("cursor = %d after moving up from the top, want the last entry", s.cursor)
@@ -283,7 +283,7 @@ func TestSuggestAtCaretInTheMiddleOfAProse(t *testing.T) {
 	const text = "please look at @ui and tell me what it does"
 	caret := len([]rune("please look at @ui"))
 
-	s := suggestFor(text, caret, idx)
+	s := suggestFor(text, caret, idx, nil)
 	if s == nil {
 		t.Fatal("a mention in the middle of a prompt offered nothing")
 	}
@@ -316,7 +316,7 @@ func TestTokenAtStopsAtTheCaret(t *testing.T) {
 func TestCommandOnALaterLine(t *testing.T) {
 	const text = "here is a long thought\nspanning two lines\n/mod"
 
-	s := suggestFor(text, caretEnd(text), nil)
+	s := suggestFor(text, caretEnd(text), nil, nil)
 	if s == nil {
 		t.Fatal("a command on its own line offered nothing")
 	}
@@ -340,7 +340,7 @@ func TestAcceptSuggestSplicesMidText(t *testing.T) {
 	ta.SetValue(text)
 
 	m := Model{input: ta, files: idx}
-	m.sug = suggestFor(text, caret, idx)
+	m.sug = suggestFor(text, caret, idx, nil)
 	if m.sug == nil {
 		t.Fatal("nothing to accept")
 	}
@@ -373,7 +373,7 @@ func TestAcceptSuggestWithNonASCIIBefore(t *testing.T) {
 	ta.SetValue(text)
 
 	m := Model{input: ta, files: idx}
-	m.sug = suggestFor(text, caret, idx)
+	m.sug = suggestFor(text, caret, idx, nil)
 	if m.sug == nil {
 		t.Fatal("nothing to accept")
 	}
@@ -392,11 +392,11 @@ func TestCaretMoveRebuildsTheList(t *testing.T) {
 	idx := indexOf("main.go", "internal/ui/ui.go")
 	const text = "@main and @internal"
 
-	first := suggestFor(text, len([]rune("@main")), idx)
+	first := suggestFor(text, len([]rune("@main")), idx, nil)
 	if first == nil || first.token != "@main" {
 		t.Fatalf("caret on the first mention offered %v", first)
 	}
-	second := suggestFor(text, caretEnd(text), idx)
+	second := suggestFor(text, caretEnd(text), idx, nil)
 	if second == nil || second.token != "@internal" {
 		t.Fatalf("caret on the second mention offered %v", second)
 	}

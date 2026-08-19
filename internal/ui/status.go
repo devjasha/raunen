@@ -260,3 +260,32 @@ func (m *Model) showMCP() tea.Cmd {
 	m.add(dimStyle.Render(fmt.Sprintf("  %d servers · %d tools", len(active), total)))
 	return nil
 }
+
+// showSkills lists what can be referenced with the skill mark, and how long
+// each one is. The length is there because a skill is charged to the context of
+// every turn that names it — a checklist and a whole style guide read the same
+// in a list of names, and cost very differently.
+func (m *Model) showSkills() {
+	m.blank()
+	m.push(entry{rule: true, stamp: "skills"})
+
+	names := m.cfg.SkillNames()
+	if len(names) == 0 {
+		m.add(dimStyle.Render("no skills defined — see " + shortRoot(config.SkillsPath())))
+		m.add(dimStyle.Render(`  add one with a text editor: {"review": {"prompt": "…"}}`))
+		return
+	}
+
+	for _, n := range names {
+		s := m.cfg.Skills[n]
+		detail := s.Description
+		if detail == "" {
+			// A skill without a description still has to say something about
+			// itself, and its own opening words describe it better than nothing.
+			detail = summarize(strings.TrimSpace(s.Prompt), 48)
+		}
+		m.add(dimStyle.Render(fmt.Sprintf("  %-16s %s", skillMark+n, detail)))
+	}
+	m.add(dimStyle.Render(fmt.Sprintf("  %d skills · reference one with %s<name> in a prompt",
+		len(names), skillMark)))
+}

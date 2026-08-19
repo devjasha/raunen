@@ -6,6 +6,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"raunen/internal/config"
 )
 
 // command is one slash command as it appears to the user. The table below is
@@ -40,6 +42,7 @@ var commands = []command{
 	{name: "/sessions", help: "list saved sessions"},
 	{name: "/resume", args: "<id>", help: "pick up a saved session"},
 	{name: "/mcp", help: "list connected MCP servers and their tools"},
+	{name: "/skills", help: "list the skills you can reference with #"},
 	{name: "/help", help: "list the commands"},
 	{name: "/quit", help: "exit", aliases: []string{"/exit", "/q"}},
 }
@@ -55,6 +58,7 @@ var keyHelp = []string{
 	"tab                      cycle auto / accept edits / plan",
 	"↑/↓ then tab             complete a / command or an @ path",
 	"@                        mark a file or folder for the model",
+	"#                        pull a saved skill into the prompt",
 	"ctrl+o                   watch the running sub-agent",
 }
 
@@ -122,6 +126,7 @@ type sugKind int
 const (
 	sugCommand sugKind = iota
 	sugFile
+	sugSkill
 )
 
 // suggestRows is how many completions are visible at once. The list comes out
@@ -130,6 +135,12 @@ const suggestRows = 6
 
 // mention is what starts a file or folder reference.
 const mention = "@"
+
+// skillMark is what starts a skill reference. It is the config package's
+// constant rather than a second copy of it: completion offers the reference and
+// the config expands it, and a mark that differed between the two would offer
+// something that then did nothing.
+const skillMark = config.SkillMark
 
 // tokenAt is the word being typed at the caret: the run of non-whitespace that
 // ends where the caret is, given as rune offsets into text so a completion can
@@ -156,8 +167,9 @@ func isTokenBreak(r rune) bool { return r == ' ' || r == '\t' || r == '\n' }
 
 // suggestFor builds the list for the token at the caret, or nil when there is
 // nothing to offer. caret is a rune offset into text. files may be nil, which
-// is the state before the first scan has come back.
-func suggestFor(text string, caret int, files *fileIndex) *suggest {
+// is the state before the first scan has come back, and so may cfg: skills are
+// an optional file, so nothing here may assume there are any.
+func suggestFor(text string, caret int, files *fileIndex, cfg *config.Config) *suggest {
 	token, start, end := tokenAt(text, caret)
 	switch {
 	// A command has to open a line of its own. That is looser than the old
@@ -172,6 +184,8 @@ func suggestFor(text string, caret int, files *fileIndex) *suggest {
 		return commandSuggest(token, start, end)
 	case strings.HasPrefix(token, mention):
 		return fileSuggest(token, start, end, files)
+	case strings.HasPrefix(token, skillMark):
+		return skillSuggest(token, start, end, cfg)
 	}
 	return nil
 }
@@ -236,6 +250,41 @@ func fileSuggest(token string, start, end int, files *fileIndex) *suggest {
 		})
 	}
 	if len(s.items) == 0 {
+		return nil
+	}
+	return s
+}
+
+// skillSuggest offers the skills whose names carry on from what has been typed.
+// A bare # lists all of them, which is what makes the mark a way to remember
+// what has been defined rather than something only useful once the name is
+// known.
+//
+// Prefix matching, like the commands and unlike the paths: a set of skills is a
+// short hand-written list, and a name that jumped around under the cursor
+// because it fuzzily matched would be harder to take than to type out.
+func skillSuggest(token string, start, end int, cfg *config.Config) *suggest {
+	if cfg == nil {
+		return nil
+	}
+	s := &suggest{kind: sugSkill, token: token, start: start, end: end}
+	q := strings.ToLower(strings.TrimPrefix(token, skillMark))
+	for _, name := range cfg.SkillNames() {
+		if !strings.HasPrefix(strings.ToLower(name), q) {
+			continue
+		}
+		s.items = append(s.items, item{
+			insert: skillMark + name,
+			// A skill name is the whole reference, so completing one ends it and
+			// the sentence around it carries on.
+			space:  true,
+			label:  skillMark + name,
+			detail: cfg.Skills[name].Description,
+		})
+	}
+	if len(s.items) == 0 {
+		// Nothing defined, or nothing that matches. An empty box would take rows
+		// off the transcript to report that a # is just a #.
 		return nil
 	}
 	return s
