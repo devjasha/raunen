@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -306,6 +307,11 @@ type Model struct {
 	width  int
 	height int
 	quit   bool
+
+	// update is the latest published version, set once a background check finds
+	// one newer than the running build. Empty until then — and stays empty if
+	// the check fails or is offline — so nothing is shown unless there is news.
+	update string
 }
 
 // SetMCPSummary records how many tools each MCP server contributed this run, so
@@ -417,7 +423,95 @@ func (m *Model) replay() {
 }
 
 func (m Model) Init() tea.Cmd {
-	return textarea.Blink
+	// The blink and the version check are independent and both run once at
+	// startup; batching them fires the check without delaying the first frame.
+	return tea.Batch(textarea.Blink, m.updateCmd())
+}
+
+// releasesURL is the GitHub endpoint that resolves to the newest published
+// release. A semver comparison against the running build decides whether to
+// say anything, so a dev build — version "dev" — is never nagged.
+const releasesURL = "https://api.github.com/repos/devjasha/raunen/releases/latest"
+
+// updateCmd checks for a newer release without blocking startup. It runs off
+// the main loop and reports back with an updateMsg, which the model stores if
+// the version found is newer than what is running.
+func (m Model) updateCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
+		if err != nil {
+			return updateMsg{}
+		}
+		// GitHub's API asks for a User-Agent and refuses requests without one.
+		req.Header.Set("User-Agent", "raunen/"+Version)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return updateMsg{}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return updateMsg{}
+		}
+		var rel struct {
+			TagName string `json:"tag_name"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+			return updateMsg{}
+		}
+		if rel.TagName == "" {
+			return updateMsg{}
+		}
+		// Only surface it when it is actually newer, so a rebuild of the same
+		// release — or a dev build that cannot be compared — stays quiet.
+		if newer(rel.TagName, Version) {
+			return updateMsg{version: rel.TagName}
+		}
+		return updateMsg{}
+	}
+}
+
+// updateMsg carries the result of the background version check. version is
+// empty when there is nothing to report — either no update, or the check
+// failed and we do not want to fuss the user over a flaky connection.
+type updateMsg struct{ version string }
+
+// newer reports whether a is a semver release tag strictly later than b.
+// Both are expected stripped of a leading "v". A build with no comparable
+// version (one of them empty, or "dev") is treated as not newer, so the hint
+// only ever points forward to a concrete release.
+func newer(a, b string) bool {
+	a = strings.TrimPrefix(a, "v")
+	b = strings.TrimPrefix(b, "v")
+	if a == "" || b == "" || b == "dev" {
+		return false
+	}
+	as, bs := splitVer(a), splitVer(b)
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		if as[i] != bs[i] {
+			return as[i] > bs[i]
+		}
+	}
+	// A longer, equal-prefix version (e.g. 1.2.1 vs 1.2.0) is newer.
+	return len(as) > len(bs)
+}
+
+// splitVer turns "1.2.3" into [1, 2, 3], ignoring any non-numeric tail so a
+// tag like "1.2.3-rc1" still compares on its numeric parts.
+func splitVer(v string) []int {
+	out := []int{}
+	for _, p := range strings.Split(v, ".") {
+		n := 0
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				break
+			}
+			n = n*10 + int(r-'0')
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // entry is one logical transcript line together with the prefixes used when it
@@ -901,6 +995,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The mention that asked for this has been growing while the tree was
 		// read, so the list is built from what is in the input now.
 		return m, m.refreshSuggest()
+
+	case updateMsg:
+		// A newer release was found in the background. Stored, not printed: it
+		// shows up on the bar beneath the input, which is drawn every frame.
+		if msg.version != "" {
+			m.update = msg.version
+		}
+		return m, nil
 
 	case tea.MouseClickMsg:
 		return m.onClick(msg.Mouse())
@@ -2611,9 +2713,28 @@ func (m Model) bar() string {
 	}
 	parts = append(parts, levelStyle.Render(star))
 
-	// Trimmed from the right, so the mode — the thing that changes what a
-	// keystroke does — is the last to go.
-	return ansi.Truncate(strings.Join(parts, sep), m.innerWidth(), "…")
+	left := strings.Join(parts, sep)
+
+	// A newer release, when one was found in the background, sits on the right
+	// of the same row — below the input, where the eye lands — so it reads as
+	// a quiet aside rather than a takeover. The reference line yields room to
+	// it, dropping from the right first so the mode is the last thing to go.
+	if m.update != "" {
+		hint := okStyle.Render(fmt.Sprintf("↑ v%s — curl -fsSL https://raunen.sh | sh", m.update))
+		// Width of the hint plus a gap it needs on a narrow screen to stay
+		// readable. If there is no room, the reference line wins — the hint
+		// can wait for a wider terminal, the bar cannot.
+		room := m.innerWidth() - ansi.StringWidth(hint) - 2
+		if room > 10 {
+			left = ansi.Truncate(left, room, "…")
+		}
+		pad := m.innerWidth() - ansi.StringWidth(left) - ansi.StringWidth(hint)
+		if pad < 0 {
+			pad = 0
+		}
+		return left + strings.Repeat(" ", pad) + hint
+	}
+	return ansi.Truncate(left, m.innerWidth(), "…")
 }
 
 // usage describes context consumption. With a declared context window it is a
