@@ -242,10 +242,17 @@ func (m *Model) showMCP() tea.Cmd {
 	}
 	sort.Strings(names)
 
+	// Read the counts once so every row in this listing agrees, even if a server
+	// refreshes its toolset while we are rendering.
+	counts := map[string]int{}
+	if m.mcp != nil {
+		counts = m.mcp()
+	}
+
 	total := 0
 	for _, n := range names {
 		_, on := active[n]
-		count := m.mcp[n]
+		count := counts[n]
 		total += count
 		state := dimStyle.Render("off")
 		if on {
@@ -257,7 +264,18 @@ func (m *Model) showMCP() tea.Cmd {
 		}
 		m.add(dimStyle.Render(fmt.Sprintf("  %-16s %s", n, state)))
 	}
-	m.add(dimStyle.Render(fmt.Sprintf("  %d servers · %d tools", len(active), total)))
+	line := fmt.Sprintf("  %d servers · %d tools", len(active), total)
+	// Say when the tools are being held back, because otherwise a model that
+	// cannot see them looks like a bug rather than the point: the schemas are
+	// kept out of the request until one is asked for.
+	if m.mcpLazy {
+		line += " · searched on demand"
+	}
+	m.add(dimStyle.Render(line))
+	if m.mcpLazy {
+		m.add(dimStyle.Render("  the model finds them with mcp_search_tools, " +
+			"so a large catalogue costs no context until used"))
+	}
 	return nil
 }
 

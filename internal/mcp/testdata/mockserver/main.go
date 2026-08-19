@@ -18,6 +18,10 @@ func main() {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 
+	// grown records that an "announce" call has extended the toolset, so a later
+	// tools/list reports the extra tool.
+	grown := false
+
 	for in.Scan() {
 		line := in.Text()
 		if line == "" {
@@ -38,12 +42,16 @@ func main() {
 		case "initialize":
 			write(out, req.ID, map[string]any{
 				"protocolVersion": "2024-11-05",
-				"capabilities":    map[string]any{},
-				"serverInfo":      map[string]any{"name": "mockserver"},
+				// Declaring listChanged is what makes the client subscribe to
+				// tools/list_changed, which the "announce" tool below triggers.
+				"capabilities": map[string]any{"tools": map[string]any{"listChanged": true}},
+				"serverInfo":   map[string]any{"name": "mockserver"},
 			})
+		case "ping":
+			write(out, req.ID, map[string]any{})
 		case "tools/list":
-			write(out, req.ID, map[string]any{
-				"tools": []map[string]any{{
+			tools := []map[string]any{
+				{
 					"name":        "ping",
 					"description": "echo the message back",
 					"inputSchema": map[string]any{
@@ -51,9 +59,41 @@ func main() {
 						"properties": map[string]any{"msg": map[string]any{"type": "string"}},
 						"required":   []string{"msg"},
 					},
-				}},
-			})
+				},
+				{
+					"name":        "lookup",
+					"description": "read a value without changing anything",
+					// readOnlyHint true declares the tool only reads, so the
+					// client should treat it as non-mutating (plan-safe).
+					"annotations": map[string]any{"readOnlyHint": true},
+					"inputSchema": map[string]any{
+						"type":       "object",
+						"properties": map[string]any{"key": map[string]any{"type": "string"}},
+						"required":   []string{"key"},
+					},
+				},
+			}
+			// After an "announce" call the server grows a tool, which is what the
+			// client should discover when it re-lists on tools/list_changed.
+			if grown {
+				tools = append(tools, map[string]any{
+					"name":        "extra",
+					"description": "only exists after the list changed",
+					"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+				})
+			}
+			write(out, req.ID, map[string]any{"tools": tools})
 		case "tools/call":
+			// "announce" grows the toolset and tells the client about it, so the
+			// live-refresh path can be exercised end to end.
+			if req.Params.Name == "announce" {
+				grown = true
+				notify(out, "notifications/tools/list_changed")
+				write(out, req.ID, map[string]any{
+					"content": []map[string]any{{"type": "text", "text": "announced"}},
+				})
+				continue
+			}
 			var args struct {
 				Msg string `json:"msg"`
 			}
@@ -70,6 +110,17 @@ func main() {
 			})
 		}
 	}
+}
+
+// notify sends a JSON-RPC notification: no id, so the client routes it to its
+// notification handler rather than to a waiting call.
+func notify(out *bufio.Writer, method string) {
+	b, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+	})
+	fmt.Fprintln(out, string(b))
+	out.Flush()
 }
 
 func write(out *bufio.Writer, id int, result any) {

@@ -284,10 +284,15 @@ type Model struct {
 	// sugOff dismisses the list until the input changes again, so esc and an
 	// accepted completion both close it without it springing straight back.
 	sugOff bool
-	// mcp is the number of tools each MCP server contributed this run, keyed by
-	// server name. Empty when none were configured; absent keys mean the server
-	// was defined but never started.
-	mcp map[string]int
+	// mcp reports how many tools each MCP server contributes, keyed by server
+	// name. Empty when none were configured; absent keys mean the server was
+	// defined but never started. It is a function rather than a map because a
+	// server that advertises Tools.ListChanged can revise its toolset mid-session,
+	// and /mcp should show what is true now rather than what was true at startup.
+	mcp func() map[string]int
+	// mcpLazy reports that the MCP tools are held in a catalogue rather than
+	// advertised, so /mcp can explain why the model does not see them directly.
+	mcpLazy bool
 	// lastInput is what the input held when the list was last rebuilt, which is
 	// how a dismissal can tell "still the same word" from "typing again".
 	lastInput string
@@ -314,10 +319,21 @@ type Model struct {
 	update string
 }
 
-// SetMCPSummary records how many tools each MCP server contributed this run, so
-// /mcp and /status can list them. It is set once at startup, before the program
-// starts, and never changed — the agent keeps its tools for the whole session.
-func (m *Model) SetMCPSummary(s map[string]int) { m.mcp = s }
+// SetMCPSummary installs a source for how many tools each MCP server
+// contributes, so /mcp and /status can list them. It is read at render time
+// rather than captured, because a server advertising Tools.ListChanged can add
+// or drop tools while the session runs.
+func (m *Model) SetMCPSummary(s map[string]int) {
+	m.mcp = func() map[string]int { return s }
+}
+
+// SetMCPCounts installs a live source for the per-server tool counts. Prefer it
+// over SetMCPSummary when the counts can change during the session.
+func (m *Model) SetMCPCounts(f func() map[string]int) { m.mcp = f }
+
+// SetMCPLazy records that the MCP tools are reached through search and select
+// rather than advertised on every request, so /mcp can say so.
+func (m *Model) SetMCPLazy(lazy bool) { m.mcpLazy = lazy }
 
 func New(cfg *config.Config, ag *agent.Agent, root, ref string, sess *session.Session, comp *companion.Companion) Model {
 	ti := textarea.New()

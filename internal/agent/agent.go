@@ -177,6 +177,9 @@ type Agent struct {
 	// not part of the message list but they are very much part of the prompt:
 	// leaving them out understates a small model's usage by hundreds of tokens.
 	schemaTokens int
+	// schemaGen is the registry generation schemaTokens was measured at, so a
+	// lazily loaded tool invalidates the figure instead of leaving it stale.
+	schemaGen uint64
 	// out is the current turn's event channel. Delegated tasks run concurrently,
 	// so several goroutines can write to it; Go channels are safe for that, and
 	// the frontend sees one interleaved stream tagged by task.
@@ -232,18 +235,24 @@ func (a *Agent) SetMaxSteps(n int) {
 // keep requests inside it. Zero disables trimming.
 func (a *Agent) SetContext(tokens int) { a.contextTokens = tokens }
 
-// overhead is what every request costs before any messages: the tool schemas,
-// measured once.
+// overhead is what every request costs before any messages: the tool schemas.
+//
+// It is recomputed whenever the toolset changes rather than measured once,
+// because lazily loaded MCP tools arrive mid-session. A cached figure would keep
+// reporting the cost of the five built-ins while the request actually carried a
+// server's schemas too, and the context bar would read low right up to the point
+// the endpoint refused the request for being too large.
 func (a *Agent) overhead() int {
 	if a.tools == nil {
 		return 0
 	}
-	if a.schemaTokens == 0 {
+	if n := a.tools.Generation(); n != a.schemaGen {
 		b, err := json.Marshal(a.tools.Schemas())
 		if err != nil {
 			return 0
 		}
 		a.schemaTokens = len(b) / 4
+		a.schemaGen = n
 	}
 	return a.schemaTokens
 }
@@ -537,7 +546,6 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event) {
 	a.out = out
 
 	a.messages = append(a.messages, provider.Message{Role: provider.User, Content: input})
-	schemas := a.tools.Schemas()
 	// Each turn starts at the bottom of the ladder: a short question does not
 	// deserve the expensive model just because an earlier one needed it.
 	a.rung = 0
@@ -567,6 +575,13 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event) {
 		// dropped: the room is the same either way, and what it costs the model
 		// to remember is not.
 		a.reduce(ctx, out)
+
+		// Read the schemas afresh each step rather than once per turn. A lazily
+		// loaded MCP tool is selected by a tool call partway through, and if the
+		// list were fixed at the top of the turn the model would be told the tool
+		// is ready while the request still did not carry it — so it would call a
+		// tool the endpoint says does not exist.
+		schemas := a.tools.Schemas()
 
 		msg, usage, err := a.client.Stream(ctx, a.messages, schemas, provider.Handler{
 			Text:      func(s string) { out <- TextDelta{Text: s} },

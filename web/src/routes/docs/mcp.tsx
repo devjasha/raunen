@@ -61,6 +61,25 @@ function Mcp() {
         {"  "}<U>{'"mcp_enabled"'}</U>{': ["filesystem"]'}
       </Term>
 
+      <h2>Large servers cost nothing until used</h2>
+      <p>
+        A tool is charged to the context of every request, whether or not it is ever
+        called: its name, description and full JSON Schema travel with each turn.
+        That is affordable for a handful and ruinous for a server advertising a
+        hundred, which can be more schema than a local model has window.
+      </p>
+      <p>
+        So past a handful of tools they are held back and reached through two small
+        ones instead — <code>mcp_search_tools</code> to find a tool by keyword, and{" "}
+        <code>mcp_select_tool</code> to load it. Only what a task actually needs is
+        paid for. A hundred-tool server costs about 215 tokens a request rather than
+        11,000, and the model calls the tool normally once it is loaded.
+      </p>
+      <p>
+        Nothing is configured. A small server is registered directly, since the two
+        extra tools would cost more than the schemas they save.
+      </p>
+
       <h2>Seeing what loaded</h2>
       <p>
         <code>/mcp</code> lists what is defined, what is active, and how many tools

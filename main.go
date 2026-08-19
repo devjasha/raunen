@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -166,7 +167,10 @@ func run() error {
 	comp := companion.Load()
 	ui.Version = version
 	m := ui.New(cfg, ag, root, ref, sess, comp)
-	m.SetMCPSummary(mcpServers.counts)
+	// Counts is read at render time, so a server that revises its toolset
+	// mid-session shows up in /mcp and /status without a restart.
+	m.SetMCPCounts(mcpServers.Counts)
+	m.SetMCPLazy(mcpServers.catalog != nil)
 	_, err = tea.NewProgram(m).Run()
 	return err
 }
@@ -176,8 +180,14 @@ func run() error {
 // contributed can be folded into the registry deterministically.
 type mcpServers struct {
 	clients []*mcp.Client
-	// byName maps a server name to how many tools it contributed, for /status.
+	// counts maps a server name to how many tools it contributed, for /status and
+	// /mcp. A server may refresh its toolset mid-session when it advertises
+	// Tools.ListChanged, so onToolsChanged updates this under mu.
 	counts map[string]int
+	mu     sync.Mutex
+	// catalog holds the tools kept out of the request when there are too many to
+	// advertise, nil when they were all registered directly.
+	catalog *mcp.Catalog
 }
 
 // Close stops every MCP server, freeing its process. The agent keeps running;
@@ -188,25 +198,102 @@ func (s *mcpServers) Close() {
 	}
 }
 
-// AddTo copies the registry and registers every tool the servers advertised,
-// renaming on collision so two servers that both expose "search" do not
-// overwrite one another. The model sees each tool prefixed with its server.
+// lazyThreshold is how many MCP tools may be registered directly before they are
+// put behind the search/select pair instead.
+//
+// The indirection is not free: two extra tools are advertised on every request,
+// and reaching a server tool costs two round trips before it can be called. Below
+// a handful of tools that overhead is larger than the schemas it saves, so a
+// small server is simply registered. It is the large catalogue — the case that
+// makes a local model unusable — that the indirection is for.
+const lazyThreshold = 5
+
+// AddTo copies the registry and makes the servers' tools reachable, renaming on
+// collision so two servers that both expose "search" do not overwrite one
+// another. The model sees each tool prefixed with its server.
+//
+// Small toolsets are registered directly. A large one is held in a catalogue and
+// reached through mcp_search_tools and mcp_select_tool, so a server advertising a
+// hundred tools costs two schemas per request instead of a hundred — which is the
+// difference between a local 8k model working and not.
 func (s *mcpServers) AddTo(reg *tools.Registry) *tools.Registry {
 	out := reg.Clone()
+
+	// Name every tool up front, so the decision to go lazy is made against the
+	// real total and the names are identical either way.
+	type named struct {
+		server string
+		tool   tools.Tool
+	}
+	var all []named
+	taken := map[string]bool{}
 	for _, c := range s.clients {
-		cnt := 0
+		name := c.Name()
 		for _, t := range c.Tools() {
-			name := t.Name
+			tname := t.Name
 			// Two servers may both expose "search"; disambiguate rather than let
 			// the second overwrite the first, which would silently reroute calls.
-			for out.Has(name) {
-				name = c.Name() + "_" + t.Name
+			for out.Has(tname) || taken[tname] {
+				tname = name + "_" + t.Name
 			}
-			t.Name = name
-			out.Add(t)
-			cnt++
+			taken[tname] = true
+			t.Name = tname
+			all = append(all, named{server: name, tool: t})
 		}
-		s.counts[c.Name()] = cnt
+		s.mu.Lock()
+		s.counts[name] = 0
+		s.mu.Unlock()
+	}
+	for _, n := range all {
+		s.mu.Lock()
+		s.counts[n.server]++
+		s.mu.Unlock()
+	}
+
+	if len(all) <= lazyThreshold {
+		for _, n := range all {
+			out.Add(n.tool)
+		}
+		s.watch(nil)
+		return out
+	}
+
+	// Selecting a tool adds it to this registry, which the agent re-reads on
+	// every step — so a tool becomes callable on the request after it is chosen.
+	cat := mcp.NewCatalog(out.Add)
+	for _, n := range all {
+		cat.Add(n.tool)
+	}
+	out.Add(cat.SearchTool())
+	out.Add(cat.SelectTool())
+	s.catalog = cat
+	s.watch(cat)
+	return out
+}
+
+// watch keeps the tool counts, and the catalogue when there is one, up to date
+// as servers revise what they offer.
+func (s *mcpServers) watch(cat *mcp.Catalog) {
+	for _, c := range s.clients {
+		c.SetOnToolsChanged(func(server string, ts []tools.Tool) {
+			s.mu.Lock()
+			s.counts[server] = len(ts)
+			s.mu.Unlock()
+			if cat != nil {
+				cat.Replace(server, ts)
+			}
+		})
+	}
+}
+
+// Counts returns a snapshot of how many tools each server contributed, safe to
+// read from the UI goroutine while a refresh may be updating it.
+func (s *mcpServers) Counts() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int, len(s.counts))
+	for k, v := range s.counts {
+		out[k] = v
 	}
 	return out
 }
