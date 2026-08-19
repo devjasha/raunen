@@ -126,6 +126,28 @@ type MCP struct {
 	// Headers are extra HTTP headers for an http server, e.g. an Authorization
 	// bearer token. Forwarded verbatim on every request.
 	Headers map[string]string `json:"headers,omitempty"`
+	// OAuth turns on OAuth 2.1 for a remote server, so a 401 opens a browser
+	// login rather than failing. Every field inside is optional — "oauth": {}
+	// means discover everything from the server — while leaving the block out
+	// entirely means no OAuth, which is what every existing config says.
+	OAuth *MCPOAuth `json:"oauth,omitempty"`
+}
+
+// MCPOAuth pins the parts of the OAuth flow that discovery cannot work out on
+// its own. All of it is optional; an empty block is the intended common case.
+type MCPOAuth struct {
+	// Issuer pins the authorization server, skipping protected-resource
+	// discovery for a server that does not publish RFC 9728 metadata.
+	Issuer string `json:"issuer,omitempty"`
+	// ClientID skips dynamic client registration, for an authorization server
+	// where raunen was registered by hand.
+	ClientID string `json:"client_id,omitempty"`
+	// Scopes are requested at authorization; a scope the server demands in a
+	// challenge wins over these.
+	Scopes []string `json:"scopes,omitempty"`
+	// Resource overrides the resource identifier sent with the request.
+	// Defaults to the server URL.
+	Resource string `json:"resource,omitempty"`
 }
 
 // Skill is a named piece of prompt kept out of the conversation until it is

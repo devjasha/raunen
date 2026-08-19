@@ -307,9 +307,26 @@ func startMCP(cfg *config.Config) *mcpServers {
 	if len(defs) == 0 {
 		return ss
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 	for name, def := range defs {
+		// An OAuth block is carried across rather than shared, so config keeps no
+		// knowledge of the protocol and mcp keeps no dependency on config.
+		var oa *mcp.OAuth
+		if def.OAuth != nil {
+			oa = &mcp.OAuth{
+				Issuer:   def.OAuth.Issuer,
+				ClientID: def.OAuth.ClientID,
+				Scopes:   def.OAuth.Scopes,
+				Resource: def.OAuth.Resource,
+			}
+		}
+		// 15 seconds is plenty for a server that just answers, and nowhere near
+		// enough for one whose first request opens a browser and waits for a
+		// human to log in — so an OAuth server gets the whole flow's budget.
+		budget := 15 * time.Second
+		if oa != nil {
+			budget = 5 * time.Minute
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		c, err := mcp.Start(ctx, name, mcp.Server{
 			Command: def.Command,
 			Args:    def.Args,
@@ -317,7 +334,9 @@ func startMCP(cfg *config.Config) *mcpServers {
 			Type:    def.Type,
 			URL:     def.URL,
 			Headers: def.Headers,
+			OAuth:   oa,
 		})
+		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "raunen: mcp %q not started — %s\n", name, err)
 			continue

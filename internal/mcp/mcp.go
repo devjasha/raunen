@@ -66,6 +66,16 @@ type Server struct {
 	// Enabled is consulted by the caller, not here: a server can be defined but
 	// left off so it is not started until the user asks for it.
 	Enabled bool `json:"enabled,omitempty"`
+	// OAuth, when present, turns on OAuth 2.1 for a remote server: a 401 starts
+	// discovery and a browser login instead of failing the request. An empty
+	// block is the normal case — everything is discovered from the server. Its
+	// absence means no OAuth at all, so an existing config behaves as before.
+	OAuth *OAuth `json:"oauth,omitempty"`
+	// TokenStore is where tokens are persisted. Nil uses the on-disk store at
+	// TokenPath; tests inject their own.
+	TokenStore TokenStore `json:"-"`
+	// OpenBrowser opens the authorization URL. Nil uses the platform opener.
+	OpenBrowser func(string) error `json:"-"`
 }
 
 // transport is everything that differs between stdio and http. A Client drives
