@@ -209,7 +209,15 @@ var (
 // column alignment that makes a diff readable, and a window whose rows are all
 // one line deep costs a predictable number of screen rows.
 func (c *codeBlock) rows(width int) []string {
-	if c == nil || len(c.lines) == 0 {
+	return c.rowsCapped(width, maxBodyLines)
+}
+
+// rowsCapped is rows with the body limit given rather than assumed. The
+// sub-agent panel draws the same windows a few rows tall inside its own border,
+// where the transcript's sixteen would be the entire panel and then some, so it
+// asks for as many lines as it can spare instead of taking the default.
+func (c *codeBlock) rowsCapped(width, maxBody int) []string {
+	if c == nil || len(c.lines) == 0 || maxBody < 1 {
 		return nil
 	}
 	indentW := lipgloss.Width(c.indent)
@@ -218,9 +226,13 @@ func (c *codeBlock) rows(width int) []string {
 
 	body := collapse(c.lines, diffContext)
 	over := 0
-	if len(body) > maxBodyLines {
-		over = len(body) - maxBodyLines
-		body = body[:maxBodyLines]
+	if len(body) > maxBody {
+		// The caller asked for maxBody rows and meant it — the transcript hands
+		// over its own limit, the sub-agent panel a much smaller one — so the
+		// truncation respects that number rather than the default. The lines cut
+		// off here are not lost silently: the "more lines" marker counts them.
+		over = len(body) - maxBody
+		body = body[:maxBody]
 	}
 
 	// The gutter is as wide as the largest number it has to hold, so the code

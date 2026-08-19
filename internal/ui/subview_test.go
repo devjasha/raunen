@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"raunen/internal/agent"
 )
 
 // TestSubViewCollapsedTakesNoRows is the layout invariant the whole feature
@@ -155,6 +158,107 @@ func TestSubsHintFits(t *testing.T) {
 		if got > width {
 			t.Errorf("width %d: hint renders %d cells:\n%q",
 				width, got, subsHint(subs, "⠋", width))
+		}
+	}
+}
+
+// TestSubViewEditWindowRoutedByTaskID is the concurrency guarantee the panels
+// rest on: several sub-agents run at once, distinguished only by task id, and an
+// edit from one must reach that one's panel and no other's — a write by t1 must
+// not appear in t2's window, or the reader would be watching the wrong agent.
+func TestSubViewEditWindowRoutedByTaskID(t *testing.T) {
+	m := testModel(t)
+	turn := begin(&m)
+
+	// Two sub-agents start together, the way a fan-out delegation does.
+	m.onEvent(turn, agent.TaskStart{ID: "t1", Description: "rewrite the ui"})
+	m.onEvent(turn, agent.TaskStart{ID: "t2", Description: "tidy the agent"})
+
+	args := mustJSON(t, map[string]string{
+		"path":    "panel.go",
+		"content": "package ui\n\nfunc Panel() {}\n",
+	})
+	m.onEvent(turn, agent.ToolStart{Name: "write", Task: "t1", Args: args})
+
+	if got := len(m.sub("t1").codes); got != 1 {
+		t.Fatalf("t1 got %d code windows, want 1", got)
+	}
+	if got := len(m.sub("t2").codes); got != 0 {
+		t.Fatalf("t2 got %d code windows, want 0 — an edit must not leak across panels", got)
+	}
+
+	// Another edit from t1 appends to its own list; an edit from t2 opens its
+	// first. The windows stay partitioned by the task id throughout.
+	m.onEvent(turn, agent.ToolStart{Name: "write", Task: "t1", Args: args})
+	m.onEvent(turn, agent.ToolStart{Name: "write", Task: "t2", Args: args})
+	if got := len(m.sub("t1").codes); got != 2 {
+		t.Fatalf("t1 should hold 2 windows, got %d", got)
+	}
+	if got := len(m.sub("t2").codes); got != 1 {
+		t.Fatalf("t2 should hold 1 window, got %d", got)
+	}
+}
+
+// TestSubViewCodePreviewTruncatesBody checks the one behaviour the dual render
+// depends on: the preview shows only a few rows of the window while the expanded
+// panel shows the full cap, so the collapsed panel stays small and opening it
+// reveals more. The truncation is the point — without it the preview would be
+// the entire panel.
+func TestSubViewCodePreviewTruncatesBody(t *testing.T) {
+	// Far more lines than any panel draws, so the caps actually bite.
+	var lines []diffLine
+	for i := 0; i < maxBodyLines+10; i++ {
+		lines = append(lines, diffLine{kind: lineAdd, text: fmt.Sprintf("line %d", i), newNo: i + 1})
+	}
+	s := &subView{codes: []*codeBlock{{path: "big.go", label: "new", indent: "", lines: lines, numbered: true}}}
+
+	const inner = 76
+	preview := s.codeRows(inner, subViewRows*8, false)
+	expanded := s.codeRows(inner, expandedRows, true)
+
+	if len(expanded) <= len(preview) {
+		t.Fatalf("expanded %d rows not taller than preview %d", len(expanded), len(preview))
+	}
+	// A window of n body lines is two border rows, one header, n rows, and — when
+	// anything was cut off — one "more lines" marker, so the total is n+4. The
+	// preview must therefore top out at subViewCodeRows of body and the expanded
+	// at maxBodyLines.
+	if len(preview) > subViewCodeRows+4 {
+		t.Fatalf("preview drew %d rows, want at most the cap plus border, header and marker", len(preview))
+	}
+	if len(expanded) > maxBodyLines+4 {
+		t.Fatalf("expanded drew %d rows, want at most the cap plus border, header and marker", len(expanded))
+	}
+}
+
+// TestSubViewCodeFitsNestedWidth is the width invariant for the new window: it
+// sits inside the panel's own border and padding, so its rows must not exceed
+// the content width those leave — six cells narrower than the panel's outer
+// width, two for the border and two for the padding. At the widths a terminal
+// actually gets used at, the box must never spill past the panel.
+func TestSubViewCodeFitsNestedWidth(t *testing.T) {
+	var lines []diffLine
+	for i := 0; i < 20; i++ {
+		lines = append(lines, diffLine{
+			kind:  lineAdd,
+			text:  fmt.Sprintf("a line of content padded out to overflow at narrow widths number %d", i),
+			newNo: i + 1,
+		})
+	}
+	s := &subView{codes: []*codeBlock{{
+		path: "a/very/long/path/to/some/file.go", label: "+20", indent: "", lines: lines, numbered: true,
+	}}}
+
+	for _, width := range []int{24, 40, 80} {
+		// render hands the panel its outer width; the content it may fill is six
+		// cells narrower once the border and padding are accounted for. The code
+		// box is built at width-4, the same inner width render uses.
+		content := width - 6
+		for _, r := range s.codeRows(width-4, expandedRows, true) {
+			if got := ansi.StringWidth(r); got > content {
+				t.Errorf("width %d: code row is %d cells, over the nested %d:\n%q",
+					width, got, content, r)
+			}
 		}
 	}
 }

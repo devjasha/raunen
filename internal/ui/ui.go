@@ -1695,6 +1695,22 @@ func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
 			s.steps++
 			s.add(s.paint("⏺ "+e.Name) +
 				dimStyle.Render("  "+summarize(e.Args, max(10, m.innerWidth()-len(e.Name)-14))))
+			// The same window the transcript draws for the main conversation, so
+			// the panel shows the file the sub-agent is editing rather than only
+			// its name. Built here, at ToolStart, for the same reason the
+			// transcript does: the tool runs next, and by ToolEnd the old contents
+			// are gone, so there would be nothing to diff against. The empty
+			// indent keeps the box flush against the panel's own border instead of
+			// hanging under a tool marker that is not there.
+			if c := codeWindow(m.root, e.Name, e.Args, ""); c != nil {
+				s.codes = append(s.codes, c)
+				// The steps ahead are already trimmed to bound the lines slice;
+				// the windows keep pace so the panel does not grow without end
+				// over a long-running sub-agent.
+				if len(s.codes) > subViewRows*8 {
+					s.codes = s.codes[len(s.codes)-subViewRows*8:]
+				}
+			}
 			return *m, next
 		}
 		m.settle(t)

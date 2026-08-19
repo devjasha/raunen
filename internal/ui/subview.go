@@ -27,6 +27,12 @@ type subView struct {
 	// be closed when a different one ends.
 	owner *turn
 	lines []string
+	// codes holds the edit windows this sub-agent has opened, one per write or
+	// edit, so the panel can show the file it is working on the way the main
+	// transcript does. Only the most recent is ever drawn — it is the change in
+	// progress — but the whole list is kept so a long-running sub does not lose
+	// its last window when the steps ahead of it scroll off the tail.
+	codes []*codeBlock
 	// steps counts tool calls, so the hint can say how far along it is without
 	// the panel being open.
 	steps int
@@ -52,6 +58,12 @@ const subViewRows = 6
 // whole screen, so a tall terminal does not hand a single sub a window the size
 // of the session.
 const expandedRows = 30
+
+// subViewCodeRows is the most an edit window shows in the preview panel. The
+// expanded panel asks the renderer for maxBodyLines instead; the window is the
+// same data, drawn a few rows deep here and in full there, which is all the
+// preview is for — to watch the change take shape, not to read the file.
+const subViewCodeRows = 4
 
 // subMarks name sub-agents. Colour alone is not enough — a narrow palette or a
 // colour-blind reader would be left with two identical marks — so the glyph
@@ -224,15 +236,33 @@ func (s *subView) render(width int, spinner string, i, n, rows int, expanded boo
 
 	// Header + border account for three rows; the rest is body.
 	body := max(0, rows-3)
+	var bodyStr string
 	if expanded {
-		b.WriteString(s.expandedBody(inner, body))
+		bodyStr = s.expandedBody(inner, body)
 	} else {
+		var sb strings.Builder
 		shown := s.lines
 		if len(shown) > subViewRows {
 			shown = shown[len(shown)-subViewRows:]
 		}
 		for _, l := range shown {
-			b.WriteString("\n" + ansi.Truncate(l, inner, "…"))
+			sb.WriteString("\n" + ansi.Truncate(l, inner, "…"))
+		}
+		bodyStr = sb.String()
+	}
+	b.WriteString(bodyStr)
+
+	// The edit window rides at the tail, after the steps (and the answer, once
+	// the sub-agent is done), so the eye lands on the file most recently touched.
+	// The steps and answer already written take their rows first; counting their
+	// newlines leaves the window exactly the room left in the body, so its border
+	// never runs past the panel's. When there is nothing left it is dropped
+	// rather than overflowing — the steps are the point of the panel, the window
+	// is a bonus that must not cost them a row.
+	room := body - strings.Count(bodyStr, "\n")
+	if rows := s.codeRows(inner, room, expanded); len(rows) > 0 {
+		for _, r := range rows {
+			b.WriteString("\n" + r)
 		}
 	}
 
@@ -242,6 +272,36 @@ func (s *subView) render(width int, spinner string, i, n, rows int, expanded boo
 		Padding(0, 1).
 		Width(max(10, width-2)).
 		Render(b.String())
+}
+
+// codeRows renders the panel's edit window: the most recent write or edit this
+// sub-agent made, drawn at the panel's inner width so it sits inside the border
+// rather than spilling past it. Only the last is shown — it is the change in
+// progress, and the earlier ones have scrolled off the tail of the steps with
+// the calls that made them. The truncation is explicit: the preview asks for
+// subViewCodeRows (a few, to watch the shape of the change form), the expanded
+// panel asks for maxBodyLines (the whole window), and whichever is smaller —
+// that cap or the rows still free in the body — wins, so the box is never taller
+// than the space left and the same window reads shallow when collapsed and full
+// when opened. An empty width is returned when there is no window or no room, so
+// the caller can add the rows it has without special-casing the absence.
+func (s *subView) codeRows(inner, room int, expanded bool) []string {
+	if room <= 0 || len(s.codes) == 0 {
+		return nil
+	}
+	c := s.codes[len(s.codes)-1]
+	cap := subViewCodeRows
+	if expanded {
+		cap = maxBodyLines
+	}
+	if cap > room {
+		cap = room
+	}
+	rows := c.rowsCapped(inner, cap)
+	if len(rows) == 0 {
+		return nil
+	}
+	return rows
 }
 
 // expandedBody appends the sub-agent's full step history and, once it has
