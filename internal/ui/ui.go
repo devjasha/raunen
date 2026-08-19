@@ -290,6 +290,9 @@ type Model struct {
 	// server that advertises Tools.ListChanged can revise its toolset mid-session,
 	// and /mcp should show what is true now rather than what was true at startup.
 	mcp func() map[string]int
+	// mcpLazy reports that the MCP tools are held in a catalogue rather than
+	// advertised, so /mcp can explain why the model does not see them directly.
+	mcpLazy bool
 	// lastInput is what the input held when the list was last rebuilt, which is
 	// how a dismissal can tell "still the same word" from "typing again".
 	lastInput string
@@ -327,6 +330,10 @@ func (m *Model) SetMCPSummary(s map[string]int) {
 // SetMCPCounts installs a live source for the per-server tool counts. Prefer it
 // over SetMCPSummary when the counts can change during the session.
 func (m *Model) SetMCPCounts(f func() map[string]int) { m.mcp = f }
+
+// SetMCPLazy records that the MCP tools are reached through search and select
+// rather than advertised on every request, so /mcp can say so.
+func (m *Model) SetMCPLazy(lazy bool) { m.mcpLazy = lazy }
 
 func New(cfg *config.Config, ag *agent.Agent, root, ref string, sess *session.Session, comp *companion.Companion) Model {
 	ti := textarea.New()

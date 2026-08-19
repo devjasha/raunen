@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -41,22 +42,51 @@ func (t Tool) IsReadOnly(args json.RawMessage) bool {
 }
 
 // Registry holds the tools available to a session.
+//
+// It is guarded by a mutex because MCP tools can be added after the session has
+// started: a lazily loaded tool is selected mid-turn, from the goroutine running
+// the tool call, while the agent reads the registry to build the next request.
 type Registry struct {
+	mu    sync.Mutex
 	tools map[string]Tool
 	order []string
+	// gen counts changes to the toolset, so a caller that caches something
+	// derived from it — the measured cost of the schemas, say — can tell when
+	// its copy went stale without diffing the whole set.
+	gen uint64
+}
+
+// Generation reports a counter that changes whenever a tool is added. It exists
+// so the agent can re-measure the schemas after a lazily loaded MCP tool arrives
+// instead of reporting the cost it found at startup forever.
+func (r *Registry) Generation() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.gen
 }
 
 func (r *Registry) Add(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.addLocked(t)
+}
+
+func (r *Registry) addLocked(t Tool) {
 	if r.tools == nil {
 		r.tools = map[string]Tool{}
 	}
+	if _, seen := r.tools[t.Name]; !seen {
+		r.order = append(r.order, t.Name)
+	}
 	r.tools[t.Name] = t
-	r.order = append(r.order, t.Name)
+	r.gen++
 }
 
 // Names returns the tools in the order they were added. Callers that only read
 // the registry should use this rather than reaching for the unexported fields.
 func (r *Registry) Names() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	out := make([]string, len(r.order))
 	copy(out, r.order)
 	return out
@@ -66,15 +96,19 @@ func (r *Registry) Names() []string {
 // Used to fold in a second source of tools without disturbing the original —
 // MCP servers register into a copy so the built-in set stays intact.
 func (r *Registry) Clone() *Registry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	out := &Registry{}
 	for _, n := range r.order {
-		out.Add(r.tools[n])
+		out.addLocked(r.tools[n])
 	}
 	return out
 }
 
 // Has reports whether a tool by this name already exists.
 func (r *Registry) Has(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	_, ok := r.tools[name]
 	return ok
 }
@@ -82,23 +116,29 @@ func (r *Registry) Has(name string) bool {
 // Without returns a copy of the registry with a tool removed. It is what stops
 // a sub-agent from delegating further: the child simply does not have the tool.
 func (r *Registry) Without(name string) *Registry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	out := &Registry{}
 	for _, n := range r.order {
 		if n == name {
 			continue
 		}
-		out.Add(r.tools[n])
+		out.addLocked(r.tools[n])
 	}
 	return out
 }
 
 func (r *Registry) Get(name string) (Tool, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	t, ok := r.tools[name]
 	return t, ok
 }
 
 // Schemas renders the registry in the shape the API expects.
 func (r *Registry) Schemas() []provider.ToolSchema {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	out := make([]provider.ToolSchema, 0, len(r.order))
 	for _, name := range r.order {
 		t := r.tools[name]
