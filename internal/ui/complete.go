@@ -41,7 +41,7 @@ var commands = []command{
 	{name: "/clear", help: "start a new session", aliases: []string{"/new"}},
 	{name: "/sessions", help: "list saved sessions"},
 	{name: "/resume", args: "<id>", help: "pick up a saved session"},
-	{name: "/mcp", help: "list connected MCP servers and their tools"},
+	{name: "/mcp", args: "[server]", help: "list connected MCP servers and their tools"},
 	{name: "/skills", help: "list the skills you can reference with #"},
 	{name: "/help", help: "list the commands"},
 	{name: "/quit", help: "exit", aliases: []string{"/exit", "/q"}},
@@ -127,6 +127,9 @@ const (
 	sugCommand sugKind = iota
 	sugFile
 	sugSkill
+	// sugMCP is an argument rather than a command, so enter sends the line as
+	// it stands instead of completing it, the same as a mention.
+	sugMCP
 )
 
 // suggestRows is how many completions are visible at once. The list comes out
@@ -180,6 +183,11 @@ func suggestFor(text string, caret int, files *fileIndex, cfg *config.Config) *s
 	// than never offering one at all. Leading whitespace does not count as the
 	// start of a line either; indented text is code being quoted far more
 	// often than it is a command.
+	// An argument to /mcp completes to a server name. This is checked before
+	// the command case because by then the slash is behind a space and the
+	// token being completed is the name, not the command.
+	case mcpArgAt(text, start):
+		return mcpSuggest(token, start, end, cfg)
 	case strings.HasPrefix(token, "/") && atLineStart(text, start):
 		return commandSuggest(token, start, end)
 	case strings.HasPrefix(token, mention):
@@ -247,6 +255,63 @@ func fileSuggest(token string, start, end int, files *fileIndex) *suggest {
 			// mention open and lists what is inside it.
 			space: !isDir,
 			label: mention + p,
+		})
+	}
+	if len(s.items) == 0 {
+		return nil
+	}
+	return s
+}
+
+// mcpArgAt reports whether the token starting at off is the argument of a /mcp
+// on the same line — that is, "/mcp " and then a single word. A second word is
+// not an argument this command has, so completion stops rather than offering
+// server names forever.
+func mcpArgAt(text string, off int) bool {
+	r := []rune(text)
+	if off > len(r) {
+		return false
+	}
+	// Back up to the start of the line the token sits on.
+	ls := off
+	for ls > 0 && r[ls-1] != '\n' {
+		ls--
+	}
+	before := string(r[ls:off])
+	rest := strings.TrimPrefix(before, "/mcp")
+	if rest == before {
+		return false
+	}
+	// Everything between the command and the caret must be the one space that
+	// separates them; anything else is a second argument or prose.
+	return rest != "" && strings.TrimLeft(rest, " ") == ""
+}
+
+// mcpSuggest offers the configured server names as arguments to /mcp, so the
+// set of servers can be seen from the input line the way commands and skills
+// can, rather than only after running the command.
+func mcpSuggest(token string, start, end int, cfg *config.Config) *suggest {
+	if cfg == nil {
+		return nil
+	}
+	s := &suggest{kind: sugMCP, token: token, start: start, end: end}
+	q := strings.ToLower(token)
+	for _, name := range cfg.MCPNames() {
+		if !strings.HasPrefix(strings.ToLower(name), q) {
+			continue
+		}
+		def := cfg.MCP[name]
+		// The detail says where the server comes from, which is what
+		// distinguishes two names in a list that is otherwise just words.
+		detail := def.Command
+		if def.Type == "http" {
+			detail = def.URL
+		}
+		s.items = append(s.items, item{
+			insert: name,
+			space:  true,
+			label:  name,
+			detail: detail,
 		})
 	}
 	if len(s.items) == 0 {

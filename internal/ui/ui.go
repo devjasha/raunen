@@ -2425,6 +2425,9 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		return *m, nil
 
 	case "/mcp":
+		if len(fields) > 1 {
+			return *m, m.showMCPServer(fields[1])
+		}
 		return *m, m.showMCP()
 
 	case "/skills":

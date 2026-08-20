@@ -175,6 +175,18 @@ func (c *Config) SkillNames() []string {
 	return out
 }
 
+// MCPNames lists the defined MCP servers in a stable order, for the same reason
+// SkillNames does: a list offered while typing must not reshuffle between one
+// look and the next.
+func (c *Config) MCPNames() []string {
+	out := make([]string, 0, len(c.MCP))
+	for name := range c.MCP {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Skill looks a skill up by name. Matching is case-insensitive because the name
 // is typed mid-sentence, where a capital at the start of one is a typing habit
 // rather than a different skill.
@@ -574,6 +586,12 @@ func Load(path string) (*Config, error) {
 		if err := save(path, c); err != nil {
 			return nil, err
 		}
+		// A first run still has to pick up mcp.json: the two files are written
+		// and edited independently, so a config that does not exist yet says
+		// nothing about whether servers have been defined.
+		if err := c.loadServers(); err != nil {
+			return nil, err
+		}
 		return c, nil
 	}
 	if err != nil {
@@ -596,7 +614,33 @@ func Load(path string) (*Config, error) {
 			c.Providers[name] = p
 		}
 	}
+	if err := c.loadServers(); err != nil {
+		return nil, err
+	}
 	return &c, nil
+}
+
+// loadServers merges the definitions from mcp.json into the config. They live in
+// their own file, so without this step the field stays empty and every server is
+// silently missing however well-formed mcp.json is — which is exactly the bug
+// that made a configured server report "no MCP servers" for a while.
+//
+// Anything defined inline in config.json wins, so a setup that predates the
+// separate file keeps working unchanged.
+func (c *Config) loadServers() error {
+	servers, err := LoadMCP()
+	if err != nil {
+		return err
+	}
+	if c.MCP == nil {
+		c.MCP = map[string]MCP{}
+	}
+	for name, s := range servers {
+		if _, ok := c.MCP[name]; !ok {
+			c.MCP[name] = s
+		}
+	}
+	return nil
 }
 
 func save(path string, c *Config) error {
