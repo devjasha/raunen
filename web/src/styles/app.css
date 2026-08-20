@@ -58,6 +58,49 @@
   }
 }
 
+/* A manual choice overrides the OS preference. `data-theme` is set by the
+   toggle (and mirrored into localStorage), or by the inline head script on
+   first paint. The two rules below carry the same values so the explicit and
+   automatic dark modes cannot drift apart. */
+html[data-theme="dark"] {
+  --fg: hsl(0, 4%, 71%);
+  --fg-weak: hsl(0, 2%, 49%);
+  --fg-strong: hsl(0, 15%, 94%);
+  --bg: hsl(0, 9%, 7%);
+  --bg-weak: hsl(0, 6%, 10%);
+  --accent: hsl(33, 90%, 60%);
+  --accent-weak: hsl(30, 25%, 12%);
+  --ok: hsl(142, 45%, 55%);
+
+  --glass: hsla(0, 0%, 9%, 0.55);
+  --glass-border: hsla(0, 0%, 100%, 0.1);
+  --stage: radial-gradient(
+    120% 120% at 50% 0%,
+    hsla(33, 90%, 60%, 0.14),
+    transparent 60%
+  );
+}
+
+/* An explicit light choice holds even on a dark-OS machine. */
+html[data-theme="light"] {
+  --fg: hsl(0, 1%, 39%);
+  --fg-weak: hsl(0, 1%, 60%);
+  --fg-strong: hsl(0, 5%, 12%);
+  --bg: hsl(0, 20%, 99%);
+  --bg-weak: hsl(0, 8%, 97%);
+  --accent: hsl(28, 82%, 46%);
+  --accent-weak: hsl(38, 90%, 95%);
+  --ok: hsl(142, 60%, 33%);
+
+  --glass: hsla(0, 0%, 100%, 0.6);
+  --glass-border: hsla(0, 0%, 0%, 0.08);
+  --stage: radial-gradient(
+    120% 120% at 50% 0%,
+    hsl(28, 82%, 46%, 0.1),
+    transparent 60%
+  );
+}
+
 *,
 *::before,
 *::after {
@@ -166,6 +209,13 @@ header .wrap {
   }
 }
 
+/* The same heavier shadow under a manual dark choice on a light-OS machine. */
+html[data-theme="dark"] header .wrap {
+  box-shadow:
+    0 1px 0 hsla(0, 0%, 100%, 0.08) inset,
+    0 14px 40px -12px hsla(0, 0%, 0%, 0.6);
+}
+
 .brand {
   color: var(--fg-strong);
   text-decoration: none;
@@ -270,6 +320,28 @@ nav a.opt {
   .release-new {
     display: none;
   }
+}
+
+/* The theme switch: a small pill beside the nav links, sized like them so the
+   bar does not jump when it appears. */
+.theme-toggle {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--fg-weak);
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  transition: color 0.18s var(--ease), border-color 0.18s var(--ease),
+    background 0.18s var(--ease);
+}
+
+.theme-toggle:hover {
+  color: var(--fg-strong);
+  border-color: var(--accent);
+  background: hsla(0, 0%, 50%, 0.12);
 }
 
 /* ── hero ───────────────────────────────────────────────────────────── */
@@ -386,6 +458,15 @@ button.copy:hover {
   }
 }
 
+/* And under a manual dark choice. The terminal frame is the most exposed
+   surface on the page, so it must follow the explicit theme too. */
+html[data-theme="dark"] .term {
+  background: hsl(0, 10%, 9%);
+  box-shadow:
+    0 1px 0 hsla(0, 0%, 100%, 0.06) inset,
+    0 24px 60px -20px hsla(0, 0%, 0%, 0.8);
+}
+
 .term-bar {
   display: flex;
   align-items: center;
@@ -439,6 +520,35 @@ button.copy:hover {
 }
 .term .g {
   color: var(--ok);
+}
+
+/* A short list of reasons, between the hero terminal and the first section,
+   so a visitor answers "why this?" before scrolling. Four across on a wide
+   screen, collapsing to two then one as the viewport narrows. */
+.reasons {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1px;
+  background: var(--glass-border);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.reasons li {
+  background: var(--bg);
+  padding: 1.1rem 1.25rem;
+  font-size: 0.8125rem;
+  color: var(--fg-weak);
+  line-height: 1.55;
+}
+
+.reasons li strong {
+  color: var(--fg-strong);
+  font-weight: 500;
 }
 
 /* ── sections ───────────────────────────────────────────────────────── */

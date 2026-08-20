@@ -20,6 +20,8 @@ import { Route as DocsLocalModelsRouteImport } from './routes/docs/local-models'
 import { Route as DocsMcpRouteImport } from './routes/docs/mcp'
 import { Route as DocsModelsRouteImport } from './routes/docs/models'
 import { Route as DocsModesRouteImport } from './routes/docs/modes'
+import { Route as DocsScriptingRouteImport } from './routes/docs/scripting'
+import { Route as DocsSkillsRouteImport } from './routes/docs/skills'
 import { Route as DocsSubagentsRouteImport } from './routes/docs/subagents'
 import { Route as DocsTmuxRouteImport } from './routes/docs/tmux'
 import { Route as DocsWisprFlowRouteImport } from './routes/docs/wispr-flow'
@@ -79,6 +81,16 @@ const DocsModesRoute = DocsModesRouteImport.update({
   path: '/modes',
   getParentRoute: () => DocsRoute,
 } as any)
+const DocsScriptingRoute = DocsScriptingRouteImport.update({
+  id: '/scripting',
+  path: '/scripting',
+  getParentRoute: () => DocsRoute,
+} as any)
+const DocsSkillsRoute = DocsSkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => DocsRoute,
+} as any)
 const DocsSubagentsRoute = DocsSubagentsRouteImport.update({
   id: '/subagents',
   path: '/subagents',
@@ -106,6 +118,8 @@ export interface FileRoutesByFullPath {
   '/docs/mcp': typeof DocsMcpRoute
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
+  '/docs/scripting': typeof DocsScriptingRoute
+  '/docs/skills': typeof DocsSkillsRoute
   '/docs/subagents': typeof DocsSubagentsRoute
   '/docs/tmux': typeof DocsTmuxRoute
   '/docs/wispr-flow': typeof DocsWisprFlowRoute
@@ -121,6 +135,8 @@ export interface FileRoutesByTo {
   '/docs/mcp': typeof DocsMcpRoute
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
+  '/docs/scripting': typeof DocsScriptingRoute
+  '/docs/skills': typeof DocsSkillsRoute
   '/docs/subagents': typeof DocsSubagentsRoute
   '/docs/tmux': typeof DocsTmuxRoute
   '/docs/wispr-flow': typeof DocsWisprFlowRoute
@@ -138,6 +154,8 @@ export interface FileRoutesById {
   '/docs/mcp': typeof DocsMcpRoute
   '/docs/models': typeof DocsModelsRoute
   '/docs/modes': typeof DocsModesRoute
+  '/docs/scripting': typeof DocsScriptingRoute
+  '/docs/skills': typeof DocsSkillsRoute
   '/docs/subagents': typeof DocsSubagentsRoute
   '/docs/tmux': typeof DocsTmuxRoute
   '/docs/wispr-flow': typeof DocsWisprFlowRoute
@@ -156,6 +174,8 @@ export interface FileRouteTypes {
     | '/docs/mcp'
     | '/docs/models'
     | '/docs/modes'
+    | '/docs/scripting'
+    | '/docs/skills'
     | '/docs/subagents'
     | '/docs/tmux'
     | '/docs/wispr-flow'
@@ -171,6 +191,8 @@ export interface FileRouteTypes {
     | '/docs/mcp'
     | '/docs/models'
     | '/docs/modes'
+    | '/docs/scripting'
+    | '/docs/skills'
     | '/docs/subagents'
     | '/docs/tmux'
     | '/docs/wispr-flow'
@@ -187,6 +209,8 @@ export interface FileRouteTypes {
     | '/docs/mcp'
     | '/docs/models'
     | '/docs/modes'
+    | '/docs/scripting'
+    | '/docs/skills'
     | '/docs/subagents'
     | '/docs/tmux'
     | '/docs/wispr-flow'
@@ -278,6 +302,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsModesRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/docs/scripting': {
+      id: '/docs/scripting'
+      path: '/scripting'
+      fullPath: '/docs/scripting'
+      preLoaderRoute: typeof DocsScriptingRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/skills': {
+      id: '/docs/skills'
+      path: '/skills'
+      fullPath: '/docs/skills'
+      preLoaderRoute: typeof DocsSkillsRouteImport
+      parentRoute: typeof DocsRoute
+    }
     '/docs/subagents': {
       id: '/docs/subagents'
       path: '/subagents'
@@ -310,6 +348,8 @@ interface DocsRouteChildren {
   DocsMcpRoute: typeof DocsMcpRoute
   DocsModelsRoute: typeof DocsModelsRoute
   DocsModesRoute: typeof DocsModesRoute
+  DocsScriptingRoute: typeof DocsScriptingRoute
+  DocsSkillsRoute: typeof DocsSkillsRoute
   DocsSubagentsRoute: typeof DocsSubagentsRoute
   DocsTmuxRoute: typeof DocsTmuxRoute
   DocsWisprFlowRoute: typeof DocsWisprFlowRoute
@@ -324,6 +364,8 @@ const DocsRouteChildren: DocsRouteChildren = {
   DocsMcpRoute: DocsMcpRoute,
   DocsModelsRoute: DocsModelsRoute,
   DocsModesRoute: DocsModesRoute,
+  DocsScriptingRoute: DocsScriptingRoute,
+  DocsSkillsRoute: DocsSkillsRoute,
   DocsSubagentsRoute: DocsSubagentsRoute,
   DocsTmuxRoute: DocsTmuxRoute,
   DocsWisprFlowRoute: DocsWisprFlowRoute,

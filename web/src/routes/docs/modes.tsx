@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Term, T, D } from "../../components/Chrome";
+import { Term, U, T, D } from "../../components/Chrome";
 
 export const Route = createFileRoute("/docs/modes")({
   head: () => ({ meta: [{ title: "Modes — raunen" }] }),
@@ -75,6 +75,69 @@ function Modes() {
           refuses a harmless command it does not recognise.
         </p>
       </div>
+
+      <h2>Permission rules</h2>
+      <p>
+        Modes are a blunt instrument. <code>accept edits</code> asks about every
+        change, and the twentieth identical prompt gets approved without being read.
+        What is missing is the middle: <em>this</em> is fine, <em>that</em> never
+        is. So a tool maps either to one decision for every call —{" "}
+        <code>"write": "ask"</code> — or to patterns with their own:
+      </p>
+      <Term title="config.json">
+        {"  "}
+        <U>{'"permissions"'}</U>
+        {": {\n"}
+        {'    "bash": { "git *": "allow", "git push *": "deny" },\n'}
+        {'    "edit": { "docs/*": "allow" },\n'}
+        {'    "write": "ask"\n'}
+        {"  }"}
+      </Term>
+      <table>
+        <thead>
+          <tr>
+            <th>Decision</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>allow</code></td>
+            <td>runs without asking, even in <code>accept edits</code></td>
+          </tr>
+          <tr>
+            <td><code>deny</code></td>
+            <td>refused, in <strong>every</strong> mode</td>
+          </tr>
+          <tr>
+            <td><code>ask</code></td>
+            <td>prompts — the default when nothing matches</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        <code>*</code> is the only wildcard and it spans everything, separators
+        included — a rule about <code>docs/</code> means the whole of{" "}
+        <code>docs/</code>. A deny holds everywhere, <code>auto</code> included,
+        because "never push" is not advice about one mode. Rules refine modes
+        rather than replace them, so plan mode still refuses every change whatever
+        an <code>allow</code> says.
+      </p>
+      <p>
+        The most specific rule wins — measured by how much of the pattern is not a
+        wildcard, so <code>git push *</code> beats <code>git *</code>. Where two
+        equally specific rules disagree, the denial wins, because if the config
+        contradicts itself, refusing is the safe reading. A malformed rule is
+        reported and dropped, not fatal — and dropping fails <em>closed</em>, back
+        to asking.
+      </p>
+      <p>
+        For the moment only: press <code>a</code> at an approval prompt to approve
+        and stop asking for calls like that one, for the rest of the session. The
+        grant is deliberately narrow — a command grants the verb, a path grants
+        that file alone — and is never written to disk. <code>/permissions</code>{" "}
+        lists what is in force.
+      </p>
 
       <div className="pager">
         <Link to="/docs/configuration">← Configuration</Link>

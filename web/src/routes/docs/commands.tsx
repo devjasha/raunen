@@ -18,6 +18,8 @@ const COMMANDS: [string, string][] = [
   ["/providers", "list configured endpoints"],
   ["/key <provider>", "add an API key"],
   ["/mcp", "list MCP servers and their tools"],
+  ["/skills", "list the skills you can reference with #"],
+  ["/permissions", "what runs without asking (/perms)"],
   ["/sessions", "list saved sessions"],
   ["/resume <id>", "pick up a saved session"],
   ["/compact [what to keep]", "summarise the conversation to win back context"],
@@ -115,6 +117,16 @@ function Commands() {
           refuses fails with git's own message.
         </p>
       </div>
+
+      <h2>Pulling in a skill with #</h2>
+      <p>
+        <code>#</code> completes the skills you have saved — instructions you would
+        otherwise retype — and sends them along with the message. Typing{" "}
+        <code>#</code> opens the same discoverable list as <code>/</code> and{" "}
+        <code>@</code>, with the description beside each name; a bare{" "}
+        <code>#</code> lists them all. See{" "}
+        <Link to="/docs/skills">skills &amp; instructions</Link>.
+      </p>
 
       <h2>Pointing at files with @</h2>
       <p>

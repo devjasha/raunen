@@ -22,6 +22,8 @@ const NAV = [
     items: [
       { to: "/docs/modes", label: "Modes" },
       { to: "/docs/commands", label: "Commands & keys" },
+      { to: "/docs/skills", label: "Skills & instructions" },
+      { to: "/docs/scripting", label: "Scripting" },
       { to: "/docs/models", label: "Models & ladders" },
       { to: "/docs/subagents", label: "Sub-agents" },
       { to: "/docs/wispr-flow", label: "Wispr Flow" },
