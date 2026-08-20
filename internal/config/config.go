@@ -169,6 +169,11 @@ type Skill struct {
 	Description string `json:"description,omitempty"`
 	// Prompt is what is injected when the skill is referenced.
 	Prompt string `json:"prompt"`
+	// Source is where a discovered skill was read from, empty for one defined
+	// in skills.json. It carries no JSON name: it describes where the skill
+	// came from, which is not something to write back into the file it came
+	// from.
+	Source string `json:"-"`
 }
 
 // SkillNames lists the defined skills in a stable order, so a list of them does
@@ -192,6 +197,22 @@ func (c *Config) MCPNames() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// AddSkills folds discovered SKILL.md files in beside those from skills.json,
+// so everything downstream — completion, expansion, /skills — sees one set and
+// does not have to know where a skill came from.
+//
+// A discovered skill wins over a JSON one of the same name. skills.json is the
+// older, flatter format; if someone has written a directory for a skill they
+// already had, the directory is the newer statement of intent.
+func (c *Config) AddSkills(found map[string]Skill) {
+	if c.Skills == nil {
+		c.Skills = map[string]Skill{}
+	}
+	for name, s := range found {
+		c.Skills[name] = s
+	}
 }
 
 // Skill looks a skill up by name. Matching is case-insensitive because the name

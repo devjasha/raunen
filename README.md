@@ -681,25 +681,64 @@ limited, and `pgup`/`pgdn` still work, but it is a trade rather than a free win.
 
 ## Skills
 
-A skill is a piece of prompt you have saved under a name. The instructions
-people repeat — a review checklist, a house style, the way commit messages are
-written here — are too long to retype and too situational to put in the system
-prompt, where you would pay for them on every turn of every session.
+A skill is a piece of instruction saved under a name. The things people repeat —
+a review checklist, a house style, the way commit messages are written here —
+are too long to retype and too situational to put in the system prompt, where
+you would pay for them on every turn of every session.
 
-`~/.config/raunen/skills.json`, written empty on first run:
+A skill is a directory with a `SKILL.md` in it:
+
+```
+skills/
+└── review/
+    └── SKILL.md
+```
+
+```markdown
+---
+name: review
+description: review checklist
+---
+
+Check for data races, unhandled errors and missing tests. Say what you would
+change and why, and do not change it yourself.
+```
+
+The frontmatter is optional. Without it the directory names the skill and the
+first line describes it, so the smallest possible skill is a markdown file in a
+named folder. Keys we do not recognise — `allowed-tools`, `model`, `license` —
+are ignored rather than rejected, which is what lets one file serve several
+tools.
+
+**`SKILL.md` rather than a format of our own**, for the reason
+[`AGENTS.md`](#project-instructions) won the same argument: it is what other
+agents already read. These directories are all searched, project first:
+
+```
+skills/            .raunen/skills/     .agents/skills/
+.claude/skills/    .codex/skills/      .opencode/skills/
+```
+
+A repository that has already written its skills down works here without being
+adapted, and a skill written here is not wasted on whatever gets used next.
+`~/.config/raunen/skills/` holds your own, applied in every project — and a
+project skill of the same name wins, because a repository saying how its own
+commits are written is more specific than a global preference.
+
+`skills.json` still works and needs no migration:
 
 ```json
 {
-  "review": {
-    "description": "review checklist",
-    "prompt": "Check for data races, unhandled errors and missing tests. Say what you would change and why, and do not change it yourself."
-  },
   "commit": {
     "description": "house commit style",
-    "prompt": "Imperative mood, lower case, no full stop, under 72 characters. Explain why in the body if it is not obvious."
+    "prompt": "Imperative mood, lower case, no full stop, under 72 characters."
   }
 }
 ```
+
+Both are folded into one list, and a `SKILL.md` wins a name collision — if you
+have written a directory for a skill you already had, the directory is the newer
+statement of intent.
 
 Reference one with `#` and it goes to the model with your message:
 
@@ -717,7 +756,13 @@ everything, so the skills are discoverable without having to remember what you
 called them. `/skills` prints the same list.
 
 `description` is for you, not for the model — it is what tells one name from
-another while you are choosing. `prompt` is what is sent.
+another while you are choosing. The body is what is sent.
+
+`/skills` names the file each one came from, since two skills can share a name
+across a project and a home directory and which is winning is exactly what you
+want to know when the wrong one is used. A skill that could not be read is
+reported on stderr at startup and skipped, rather than silently contributing
+nothing.
 
 **The reference stays in the transcript; the prompt does not.** The skill is
 appended to the message on its way out, labelled `[skill: review]` so the model
@@ -733,10 +778,14 @@ that was misspelled and quietly went to the model as prose.
 typo, and rewriting prose that was never a reference is worse than ignoring one
 that was. Naming the same skill twice in a message sends it once.
 
-Skills live in their own file rather than in `config.json`, for the same reason
-MCP servers do — from the other direction. A config is personal, holds API keys
-and is a handful of settings about which model runs; a set of skills is prose,
-sometimes a page of it, and is the part worth handing to someone else.
+Skills live outside `config.json` for the same reason MCP servers do, from the
+other direction. A config is personal, holds API keys and is a handful of
+settings about which model runs; a skill is prose, sometimes a page of it, and
+is the part worth committing to a repository and handing to someone else — which
+is the argument for a directory of markdown over a string in JSON.
+
+One skill is capped at 32 KB. Past that it has stopped being an instruction and
+become a manual, and it is charged to the context of every turn that names it.
 
 ## Project instructions
 
@@ -1684,12 +1733,13 @@ main.go                    CLI entry, flags, wiring
 oneshot.go                 one-shot runs, --json and exit codes
 internal/agent             the tool-use loop, modes, compaction and trimming
 internal/companion         the mascot's progress across sessions
-internal/config            providers, models and skills
+internal/config            providers, models and saved skills
 internal/provider          OpenAI-compatible streaming client
 internal/session           saving, resuming, running instances
 internal/fileset           what git considers part of the project
 internal/instructions      AGENTS.md discovery
 internal/permission        standing allow/deny rules and session grants
+internal/skills            SKILL.md discovery
 internal/tools             bash, read, write, edit, grep, glob, list
 internal/ui                Bubble Tea TUI
 internal/vcs               git branch for the status bar, and switching it
