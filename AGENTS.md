@@ -19,7 +19,10 @@ or newer; the only dependencies are Bubble Tea and Lip Gloss.
 - `internal/acp` — Agent Client Protocol over stdio. A transport in front of
   `agent.Agent`: it must never grow behaviour the terminal does not have.
 - `internal/provider` — OpenAI-compatible streaming client
-- `internal/tools` — the built-in tools, rooted at the working directory
+- `internal/tools` — the built-in tools, rooted at the working directory. Every
+  result is bounded at the registry, not in the tool: what does not fit is kept
+  in the result store and reachable through the `result` handle, so an MCP tool
+  cannot bypass the cap by being added later
 - `internal/fileset` — what git considers part of the project; shared by the
   search tools and by `@` completion, so the two cannot disagree
 - `internal/permission` — standing allow/deny rules. Gating lives in one place,

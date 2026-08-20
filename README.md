@@ -1572,8 +1572,8 @@ where investigating is all there is to do. `grep` and `glob` never change
 anything, so they always run.
 
 **`grep -r` is not bounded.** It walks `node_modules` and `.git`, then returns a
-megabyte of minified JavaScript that gets truncated to the first 30 KB. The
-answer is in there somewhere.
+megabyte of minified JavaScript, of which the model sees the first page and has
+to go fishing through the rest. The answer is in there somewhere.
 
 **What gets searched is what git says the project is** — everything tracked,
 plus everything untracked that is not ignored. That is the right list by
@@ -1738,6 +1738,31 @@ context is discarded a few steps later anyway.
 result — a fixed 30 KB cap is ~8000 tokens, larger than the whole context of a
 model served at 4096, so one `read` would evict everything around it.
 
+**What does not fit is kept, not thrown away.** A build log is four thousand
+lines of which six matter, and which six is not knowable until the model looks.
+So a large result is stored whole and only its head goes into the conversation,
+with a handle for the rest:
+
+```
+... [2919 more lines, 84828 bytes total. The whole result is kept as r1: call
+result with id "r1" and a match pattern to search it, or from and lines to read
+on.]
+```
+
+The model then calls `result` to search the full text — `{"id": "r1", "match":
+"^FAIL"}` finds the one failing package in an 85 KB test run — or to page
+through it with `from` and `lines`. Only what it asks for is charged to the
+context; the other 82 KB never enters the conversation, so it is not in every
+subsequent request either. That is the difference between a 32k window
+compacting twice during a build-fix loop and not compacting at all.
+
+The bound lives on the tool registry rather than inside each tool, so anything
+callable is covered by construction — including MCP tools, where the output
+belongs to somebody else's server and "please keep it short" is not something
+that can be asked. Results are held in memory for the session, most recent
+first; an expired handle tells the model to run the tool again rather than
+leaving it to guess.
+
 **Trimming keeps the request valid.** The system prompt and the question being
 answered are never dropped, everything else goes oldest first, in whole
 tool-call groups so no result is left referring to a call that has gone.
@@ -1806,7 +1831,7 @@ internal/fileset           what git considers part of the project
 internal/instructions      AGENTS.md discovery
 internal/permission        standing allow/deny rules and session grants
 internal/skills            SKILL.md discovery
-internal/tools             bash, read, write, edit, grep, glob, list
+internal/tools             bash, read, write, edit, grep, glob, list, result
 internal/ui                Bubble Tea TUI
 internal/vcs               git branch for the status bar, and switching it
 contrib/raunen-picker      tmux session picker

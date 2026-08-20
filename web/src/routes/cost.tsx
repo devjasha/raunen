@@ -225,6 +225,14 @@ function Cost() {
             <a href={`${REPO}#tool-output-cleaning`}>the measured numbers</a>, which
             are deliberately unflattering.
           </p>
+          <p>
+            <G>A big result is stored rather than pasted in.</G> Only its head goes
+            into the conversation, with a handle the model uses to search or page
+            through the rest — so an 85 KB test run costs about 2.2 KB, and the rest
+            is not re-sent on every later turn. This is the single largest saving on
+            a small window, because it is what stops the conversation needing to be
+            compacted at all.
+          </p>
 
           <div className="pager">
             <Link to="/docs">← Docs</Link>

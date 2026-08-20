@@ -122,11 +122,12 @@ function Home() {
                 </p>
               </div>
               <div className="cell">
-                <h3>Seven tools</h3>
+                <h3>Eight tools</h3>
                 <p>
                   <code>read</code>, <code>write</code>, <code>edit</code>,{" "}
-                  <code>list</code>, <code>bash</code>, <code>grep</code> and{" "}
-                  <code>glob</code> — plus anything an MCP server brings along.
+                  <code>list</code>, <code>bash</code>, <code>grep</code>,{" "}
+                  <code>glob</code> and <code>result</code> — plus anything an MCP
+                  server brings along.
                 </p>
               </div>
               <div className="cell">
@@ -216,6 +217,102 @@ function Home() {
                 <D>{"auto · ⎇ main · auto/best-coding · ░░░░░░░░░░ 0% · 5.9k"}</D>
               </Term>
             </div>
+          </div>
+        </section>
+
+        <hr className="rule" />
+
+        <section>
+          <div className="wrap">
+            <h2>Every token is spent on purpose</h2>
+            <p className="lede">
+              A small model lives or dies by what is in its window. Most of what
+              fills one is not the work — it is a test run the agent read once and
+              now re-sends every single turn. Four things keep that from happening,
+              and they matter most on the models that cost nothing.
+            </p>
+
+            <div className="split" style={{ marginTop: "2rem" }}>
+              <div>
+                <h3>Big results are kept, not pasted</h3>
+                <p>
+                  A build log is four thousand lines of which six matter, and which
+                  six is not knowable until the model looks. So a large result is
+                  stored whole and only its head goes into the conversation, with a
+                  handle for the rest.
+                </p>
+                <p>
+                  The model searches the full text through that handle, or pages
+                  through it. Only what it asks for is charged to the context — an
+                  85 KB test run costs <strong>2.2 KB</strong>, and the other 82 KB
+                  never enters the conversation, so it is not in every later request
+                  either.
+                </p>
+              </div>
+              <Term title="a failing test run">
+                <T>{"    ⏺ bash"}</T>
+                {"  go test ./...\n"}
+                {"\n"}
+                <D>{"      ok   pkg/thing1   0.01s\n"}</D>
+                <D>{"      ok   pkg/thing2   0.02s\n"}</D>
+                <D>{"      …\n"}</D>
+                <D>
+                  {"      ... [2919 more lines, 84828 bytes total. Kept as r1:\n"}
+                  {"      call result with a match pattern to search it.]\n"}
+                </D>
+                {"\n"}
+                <T>{"    ⏺ result"}</T>
+                {'  {"id": "r1", "match": "^FAIL"}\n'}
+                <G>{"      ↳ 3001: FAIL raunen/internal/widget\n"}</G>
+                {"\n"}
+                {"  One package fails to build. Looking at it now.\n"}
+              </Term>
+            </div>
+
+            <div className="grid" style={{ marginTop: "2.5rem" }}>
+              <div className="cell">
+                <h3>Summarise before forgetting</h3>
+                <p>
+                  When the window fills, one model call writes down what the older
+                  messages established — paths, decisions, what is still open — and
+                  the summary goes in where they were. Typically{" "}
+                  <strong>240k → 31k tokens</strong>. Only if that is impossible are
+                  messages dropped, and it says so plainly when it happens.
+                </p>
+              </div>
+              <div className="cell">
+                <h3>The recent tail stays verbatim</h3>
+                <p>
+                  Whatever you are working on right now is worth more in full than in
+                  précis, so the last stretch of the conversation is never
+                  summarised. <code>/compact</code> does it on demand, before the
+                  window forces the issue.
+                </p>
+              </div>
+              <div className="cell">
+                <h3>Output is cleaned first</h3>
+                <p>
+                  ANSI colour codes, progress bars redrawn over themselves and
+                  repeated lines are stripped before anything is charged to the
+                  context. On tidy output that saves nothing; on a noisy build it
+                  saves a great deal.
+                </p>
+              </div>
+              <div className="cell">
+                <h3>Searching happens elsewhere</h3>
+                <p>
+                  A <Link to="/docs/subagents">sub-agent</Link> gets its own empty
+                  context and returns only its answer, so a long investigation never
+                  sits in the main conversation being re-sent. Several run at once.
+                </p>
+              </div>
+            </div>
+
+            <p className="beneath" style={{ marginTop: "2rem" }}>
+              The practical difference: a 32k window that compacted twice during a
+              build-fix loop now does not compact at all.{" "}
+              <Link to="/cost">What it costs to run →</Link>
+            </p>
           </div>
         </section>
 

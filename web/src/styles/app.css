@@ -678,6 +678,13 @@ section > .wrap > h2 {
   margin: 0 0 0.5rem;
 }
 
+/* A subheading inside a split — used where the section already has its own
+   h2 above the pair, so the column heading sits a step below it. */
+.split h3 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+
 .split p {
   margin: 0 0 0.75rem;
   font-size: 0.875rem;
