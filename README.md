@@ -205,6 +205,7 @@ raunen -version                     # print the version
 | `pgup` / `pgdn` | scroll the transcript |
 | `shift+↑` / `shift+↓` | scroll by a line |
 | `y` / `n` | answer an approval prompt |
+| `a` | approve and stop asking for calls like it |
 | click a reply | quote it in the input |
 | mouse wheel | scroll the transcript |
 
@@ -244,6 +245,7 @@ retype — and sends them along with the message. See [Skills](#skills).
 | `/prestige` | start a new climb once your dragon is fully grown |
 | `/providers` | list configured endpoints |
 | `/skills` | list the skills you can reference with `#` |
+| `/permissions` | what runs without asking (`/perms`) |
 | `/key <provider>` | add an API key |
 | `/sessions` | list saved sessions |
 | `/resume <id>` | pick up a saved session |
@@ -531,7 +533,9 @@ static binary is worth more than saving you a keystroke.
 | `plan` | anything that changes state is refused, so the model investigates and proposes |
 
 In `accept edits` a prompt takes over the status row — `? run write main.go   y
-approve  n decline` — and the agent is blocked until answered. The mode is also
+approve  a always  n decline` — and the agent is blocked until answered. `a`
+approves and stops asking for calls like it; see
+[permission rules](#permission-rules). The mode is also
 written into the system prompt, so the model knows the rules instead of learning
 them by collecting refusals.
 
@@ -546,6 +550,97 @@ That is an allowlist rather than a denylist of dangerous commands, deliberately:
 there is no way to enumerate every way a shell can change something, and a wrong
 "this is safe" writes to your disk. The cost is that plan mode sometimes refuses
 a harmless command it does not recognise.
+
+## Permission rules
+
+Modes are a blunt instrument. `accept edits` asks about every change, and the
+twentieth identical prompt gets approved without being read — which is worse
+than no prompt at all, because it looks like oversight. What is missing is the
+middle: *this* is fine, *that* never is.
+
+```json
+"permissions": {
+  "bash":  { "git *": "allow", "git push *": "deny" },
+  "edit":  { "docs/*": "allow" },
+  "write": "ask"
+}
+```
+
+A tool maps either to one decision for every call — `"write": "ask"` — or to
+patterns with their own. `*` is the only wildcard and it spans everything,
+separators included: a rule about `docs/` means the whole of `docs/`. That is
+deliberately unlike the `glob` tool, where `*` stops at a slash — requiring
+`docs/**` here would be a trap that fails towards granting more than intended.
+
+| | |
+|---|---|
+| `allow` | runs without asking, even in `accept edits` |
+| `deny` | refused, in **every** mode |
+| `ask` | prompts — the default when nothing matches |
+
+**A deny holds everywhere, `auto` included.** "Never push" is not advice about
+one mode, and an unattended agent in `auto` is exactly where the rule most needs
+to mean something. It applies to read-only tools too: `"read": {"*.env": "deny"}`
+holds even though reading changes nothing.
+
+**Rules refine modes rather than replacing them.** Plan mode still refuses every
+change whatever an `allow` says — a mode is a decision about this session, and a
+rule written last week should not quietly undo it.
+
+**The most specific rule wins**, measured by how much of the pattern is not a
+wildcard, so `git push *` beats `git *`. Naming a tool beats `*`, and where two
+equally specific rules disagree the *denial* wins — if the config contradicts
+itself, refusing is the safe reading.
+
+Specificity rather than file order, because the block is a JSON object and Go
+ranges maps in a random order. "The last matching rule wins" would decide
+differently on different runs, which is an unacceptable property for the thing
+deciding whether a command may run.
+
+**A malformed rule is reported and dropped**, not fatal:
+
+```
+raunen: permissions.bash.git *: unknown decision alow
+```
+
+One typo should not take the other nineteen with it, and dropping fails *closed*
+— back to asking — so what remains is always a subset of what was requested
+rather than a superset.
+
+### Don't ask again
+
+`a` at an approval prompt approves and stops asking for calls like that one, for
+the rest of the session:
+
+```
+  will not ask again this session for bash git commit *
+```
+
+What it grants is deliberately narrow. A command grants the verb — `git commit
+*` from `git commit -m "..."` — because the arguments vary between calls while
+the verb is what you actually read. A path grants that file alone: approving one
+edit to `main.go` says nothing about the rest of the tree.
+
+**Grants are never written to disk.** Agreeing to something once, while looking
+at it, is a different act from writing a rule that will apply next month in a
+repository you have not thought about yet. If you want it permanent, put it in
+the config, where you can see it and change it.
+
+`/permissions` lists what is in force, in the order the rules are matched:
+
+```
+──────────────────────────────────────────────────── permissions
+  bash git push *               deny
+  bash git *                    allow
+  edit docs/*                   allow
+  granted this session:
+  bash npm test *               allow
+  most specific first · a deny holds in every mode
+```
+
+Sub-agents inherit the rules and the grants. A denial that could be escaped by
+delegating past it would not be a denial, and a grant already given should not
+have to be given again by every child.
 
 ## Replying to a message
 
@@ -1594,6 +1689,7 @@ internal/provider          OpenAI-compatible streaming client
 internal/session           saving, resuming, running instances
 internal/fileset           what git considers part of the project
 internal/instructions      AGENTS.md discovery
+internal/permission        standing allow/deny rules and session grants
 internal/tools             bash, read, write, edit, grep, glob, list
 internal/ui                Bubble Tea TUI
 internal/vcs               git branch for the status bar, and switching it

@@ -43,6 +43,7 @@ import (
 	"raunen/internal/agent"
 	"raunen/internal/companion"
 	"raunen/internal/config"
+	"raunen/internal/permission"
 	"raunen/internal/provider"
 	"raunen/internal/session"
 	"raunen/internal/vcs"
@@ -1337,6 +1338,13 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "y", "Y", "enter":
 			m.answer(true)
+		case "a", "A":
+			// "Yes, and stop asking." The grant covers this session only:
+			// agreeing to something once, while looking at it, is a different
+			// act from writing a rule that applies next month in a repository
+			// you have not thought about yet.
+			m.grant()
+			m.answer(true)
 		case "n", "N", "esc", "ctrl+c":
 			m.answer(false)
 		}
@@ -1699,6 +1707,53 @@ func (m *Model) openTurn(t *turn, text, quote string) {
 	}
 	// The gap under the question is opened by whatever comes next, via
 	// pushKind — a blank line here would double it.
+}
+
+// grant records a "don't ask again" for the call being asked about.
+//
+// What it grants is deliberately narrow. For a command it is the program and
+// its subcommand — "git commit *" from `git commit -m "..."` — because the
+// argument is what varies between calls while the verb is what the user
+// actually agreed to. Granting the whole tool from one prompt would hand over
+// far more than was on screen, and granting the exact string would be useless,
+// since the next call differs by a filename.
+func (m *Model) grant() {
+	if m.ask == nil {
+		return
+	}
+	target := permission.Target(json.RawMessage(m.ask.Args))
+	pattern := grantPattern(m.ask.Name, target)
+	m.ag.Permissions().Grant(m.ask.Name, pattern, permission.Allow)
+
+	rule := m.ask.Name
+	if pattern != "" {
+		rule += " " + pattern
+	}
+	m.add(dimStyle.Render("  will not ask again this session for " + rule))
+}
+
+// grantPattern works out what a single approval should cover.
+//
+// A path grants the file, not its directory: approving one edit to main.go says
+// nothing about the rest of the tree. A command grants the verb, since that is
+// the part the user read and the part that stays the same.
+func grantPattern(tool, target string) string {
+	if target == "" {
+		return ""
+	}
+	if tool != "bash" {
+		return target
+	}
+	fields := strings.Fields(target)
+	if len(fields) == 0 {
+		return ""
+	}
+	// Two words where the second is a subcommand rather than an option or a
+	// path: "git commit", "npm test", "go build". Anything else keeps one.
+	if len(fields) > 1 && !strings.HasPrefix(fields[1], "-") && !strings.ContainsAny(fields[1], "/.") {
+		return fields[0] + " " + fields[1] + " *"
+	}
+	return fields[0] + " *"
 }
 
 // answer releases the blocked agent with the user's decision.
@@ -2463,6 +2518,10 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		m.showSkills()
 		return *m, nil
 
+	case "/permissions", "/perms":
+		m.showPermissions()
+		return *m, nil
+
 	case "/help":
 		// Printed from the same table the completion list offers, so what is
 		// documented and what can be typed cannot disagree.
@@ -2539,8 +2598,9 @@ func (m Model) View() tea.View {
 	status := ""
 	if m.ask != nil {
 		status = askStyle.Render("? run "+m.ask.Name) +
-			dimStyle.Render(" "+summarize(m.ask.Args, max(10, m.innerWidth()-40))) +
+			dimStyle.Render(" "+summarize(m.ask.Args, max(10, m.innerWidth()-56))) +
 			askStyle.Render("   y") + dimStyle.Render(" approve  ") +
+			askStyle.Render("a") + dimStyle.Render(" always  ") +
 			askStyle.Render("n") + dimStyle.Render(" decline")
 	} else if len(m.subs) > 0 && m.watching == "" {
 		// Sub-agents are running with the panel closed. This says so on the row

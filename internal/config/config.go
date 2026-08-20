@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"raunen/internal/permission"
 )
 
 // Provider is an OpenAI-compatible endpoint. Local runtimes (Ollama, LM Studio,
@@ -81,6 +83,11 @@ type Config struct {
 	Favourites []string `json:"favourites,omitempty"`
 	// System overrides the built-in system prompt when non-empty.
 	System string `json:"system,omitempty"`
+	// Permissions are standing rules about what may run without asking, keyed
+	// by tool. They refine the modes rather than replacing them: plan mode still
+	// refuses every change whatever a rule says, because a mode is a decision
+	// about this session and a rule written last week should not undo it.
+	Permissions permission.Config `json:"permissions,omitempty"`
 
 	// MCP holds Model Context Protocol servers, keyed by a name of the user's
 	// choosing. Each one is started on launch and its tools added to the agent.

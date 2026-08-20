@@ -20,6 +20,7 @@ import (
 	"raunen/internal/config"
 	"raunen/internal/instructions"
 	"raunen/internal/mcp"
+	"raunen/internal/permission"
 	"raunen/internal/provider"
 	"raunen/internal/session"
 	"raunen/internal/tools"
@@ -148,6 +149,14 @@ func run() error {
 	// replaced later without rebuilding it.
 	instr := instructions.Load(root, config.InstructionsPath())
 	ag.SetProject(instr.Prompt(root))
+	// Standing rules about what may run without asking. A malformed rule is
+	// reported and dropped rather than fatal — one typo should not take the
+	// other nineteen with it — and dropping fails closed, back to asking.
+	perms, problems := permission.Parse(cfg.Permissions)
+	for _, p := range problems {
+		fmt.Fprintln(os.Stderr, "raunen:", p)
+	}
+	ag.SetPermissions(perms)
 	ag.SetContext(window)
 	ag.SetRef(ref)
 	ag.SetAutoSwitch(cfg.AutoSwitch)
