@@ -117,6 +117,14 @@ func run() error {
 		return printRunning()
 	}
 
+	// Started here, as early as the config allows, because connecting is a
+	// network round trip per server and nothing below this depends on the
+	// result. By the time the tools are wanted the handshakes are usually done.
+	// Failures are reported but do not stop startup: one broken server is not
+	// the whole session.
+	mcpServers := startMCP(cfg)
+	defer mcpServers.Close()
+
 	// The session is opened before the model is chosen, because a resumed
 	// conversation reopens on the model it was held with. Picking one up on a
 	// different model is a surprise, and on a smaller one it can undo the very
@@ -159,11 +167,6 @@ func run() error {
 	window := windowFor(cfg, p, ref, model)
 
 	reg := tools.Default(root, tools.OutputBudget(window))
-	// MCP servers add tools alongside the built-ins; failures are reported but do
-	// not stop startup, so one broken server is not the whole session.
-	mcpServers := startMCP(cfg)
-	defer mcpServers.Close()
-	reg = mcpServers.AddTo(reg)
 
 	ag := agent.New(provider.New(p.BaseURL, p.Key(), model), reg, cfg.System)
 	// What the project says about itself, from AGENTS.md here and in the
@@ -184,14 +187,6 @@ func run() error {
 	ag.SetAutoSwitch(cfg.AutoSwitch)
 	// Zero unless the user set it: turns are unbounded by default.
 	ag.SetMaxSteps(cfg.MaxSteps)
-	ladder := fallbacks(cfg)
-	ag.SetFallbacks(ladder)
-	if debug && len(ladder) > 0 {
-		fmt.Fprintf(os.Stderr, dim("[ladder] %d models\n"), len(ladder))
-		for i, c := range ladder {
-			fmt.Fprintf(os.Stderr, dim("  %2d. %-52s ctx=%d\n"), i+1, c.Ref, c.Context)
-		}
-	}
 	if cfg.SubagentsEnabled() {
 		ag.EnableSubagents()
 	}
@@ -201,12 +196,37 @@ func run() error {
 	// A prompt on the command line runs one turn and exits, which keeps the
 	// tool usable in pipes and scripts.
 	if args := flag.Args(); len(args) > 0 {
+		reg = mcpServers.AddTo(reg)
+		ag.SetTools(reg)
+		ag.SetFallbacks(buildLadder(cfg))
 		// Expanded here as well as in the UI, so a skill is worth defining for
 		// the scripted case too — that is where the same instructions are most
 		// often repeated.
 		prompt, _ := cfg.ExpandSkills(strings.Join(args, " "))
 		return oneShot(ag, sess, prompt, oneShotOpts{json: *asJSON, save: !*noSave})
 	}
+
+	// The two slow parts of startup, finished off the critical path so the
+	// terminal draws immediately: connecting to the MCP servers, and asking
+	// every provider which of its models are free. Between them they were the
+	// whole of the wait before the first frame.
+	//
+	// Both are safe to land late. The agent re-reads its toolset on every step,
+	// and the ladder is only consulted when a turn needs to escalate — which
+	// cannot happen before the user has typed anything.
+	ready := make(chan struct{})
+	go func() {
+		defer close(ready)
+		mcpServers.Attach(reg)
+		ladder := buildLadder(cfg)
+		ag.SetFallbacks(ladder)
+		if debug && len(ladder) > 0 {
+			fmt.Fprintf(os.Stderr, dim("[ladder] %d models\n"), len(ladder))
+			for i, c := range ladder {
+				fmt.Fprintf(os.Stderr, dim("  %2d. %-52s ctx=%d\n"), i+1, c.Ref, c.Context)
+			}
+		}
+	}()
 
 	// Announce this instance so a picker can find it; tmux cannot, since it
 	// only reports a pane's foreground process.
@@ -222,9 +242,14 @@ func run() error {
 	// Counts is read at render time, so a server that revises its toolset
 	// mid-session shows up in /mcp and /status without a restart.
 	m.SetMCPCounts(mcpServers.Counts)
-	m.SetMCPLazy(mcpServers.catalog != nil)
+	m.SetMCPLazy(mcpServers.Lazy)
+	m.SetMCPFailures(mcpServers.Failures)
+	m.SetReady(ready)
 	m.SetProject(instr.Summary(root))
 	_, err = tea.NewProgram(m).Run()
+	// Let the background wiring finish before the deferred Close tears the
+	// servers down under it, so a slow server cannot be closed mid-handshake.
+	<-ready
 	return err
 }
 
@@ -241,6 +266,38 @@ type mcpServers struct {
 	// catalog holds the tools kept out of the request when there are too many to
 	// advertise, nil when they were all registered directly.
 	catalog *mcp.Catalog
+	// connected is closed once every server has answered or failed. Connecting is
+	// a network round trip per server, which is the single largest thing standing
+	// between launching raunen and being able to type, so it happens off the
+	// startup path and anything that needs the tools waits here instead.
+	connected chan struct{}
+	// failures records why each server did not start, keyed by server name.
+	//
+	// Kept rather than only printed because connecting now finishes after the
+	// alternate screen is open, and anything written to stderr from that point
+	// lands on a screen that is discarded on exit. So the reason is held here
+	// and shown in /mcp, where it can still be read.
+	failures map[string]string
+}
+
+// Failures reports why each server did not start, for /mcp. Verbatim: an
+// endpoint's own words are usually specific enough to act on.
+func (s *mcpServers) Failures() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.failures))
+	for k, v := range s.failures {
+		out[k] = v
+	}
+	return out
+}
+
+// Wait blocks until every server has finished connecting. AddTo calls it, so a
+// caller that only wants the tools does not have to.
+func (s *mcpServers) Wait() {
+	if s.connected != nil {
+		<-s.connected
+	}
 }
 
 // Close stops every MCP server, freeing its process. The agent keeps running;
@@ -270,8 +327,28 @@ const lazyThreshold = 5
 // hundred tools costs two schemas per request instead of a hundred — which is the
 // difference between a local 8k model working and not.
 func (s *mcpServers) AddTo(reg *tools.Registry) *tools.Registry {
+	// The tools cannot be named until every server has said what it has.
+	s.Wait()
 	out := reg.Clone()
+	s.attach(out)
+	return out
+}
 
+// Attach waits for the servers and folds their tools into an existing registry,
+// in place. It is what lets the terminal draw before the servers have answered:
+// the agent re-reads the toolset on every step, so a tool that arrives while the
+// user is still reading the first frame is callable by the time they ask for it.
+//
+// AddTo, which copies, is still what the one-shot and ACP paths use — they have
+// no frame to draw and nothing to gain by starting without their tools.
+func (s *mcpServers) Attach(reg *tools.Registry) {
+	s.Wait()
+	s.attach(reg)
+}
+
+// attach names every tool and adds it to reg, either directly or behind the
+// catalogue. The caller decides whether reg is a copy.
+func (s *mcpServers) attach(out *tools.Registry) {
 	// Name every tool up front, so the decision to go lazy is made against the
 	// real total and the names are identical either way.
 	type named struct {
@@ -282,23 +359,14 @@ func (s *mcpServers) AddTo(reg *tools.Registry) *tools.Registry {
 	taken := map[string]bool{}
 	for _, c := range s.clients {
 		name := c.Name()
-		for _, t := range c.Tools() {
-			tname := t.Name
-			// Two servers may both expose "search"; disambiguate rather than let
-			// the second overwrite the first, which would silently reroute calls.
-			for out.Has(tname) || taken[tname] {
-				tname = name + "_" + t.Name
-			}
-			taken[tname] = true
-			t.Name = tname
-			all = append(all, named{server: name, tool: t})
-		}
 		// A server's resource and prompt tools come along with its tools,
 		// gated on the capability each advertises. They are skipped entirely
 		// when the server does not offer the feature, so a tool that can only
 		// ever answer "method not found" is never shown.
-		for _, t := range c.ResourcePromptTools() {
+		for _, t := range append(c.Tools(), c.ResourcePromptTools()...) {
 			tname := t.Name
+			// Two servers may both expose "search"; disambiguate rather than let
+			// the second overwrite the first, which would silently reroute calls.
 			for out.Has(tname) || taken[tname] {
 				tname = name + "_" + t.Name
 			}
@@ -321,7 +389,7 @@ func (s *mcpServers) AddTo(reg *tools.Registry) *tools.Registry {
 			out.Add(n.tool)
 		}
 		s.watch(nil)
-		return out
+		return
 	}
 
 	// Selecting a tool adds it to this registry, which the agent re-reads on
@@ -332,9 +400,10 @@ func (s *mcpServers) AddTo(reg *tools.Registry) *tools.Registry {
 	}
 	out.Add(cat.SearchTool())
 	out.Add(cat.SelectTool())
+	s.mu.Lock()
 	s.catalog = cat
+	s.mu.Unlock()
 	s.watch(cat)
-	return out
 }
 
 // watch keeps the tool counts, and the catalogue when there is one, up to date
@@ -350,6 +419,14 @@ func (s *mcpServers) watch(cat *mcp.Catalog) {
 			}
 		})
 	}
+}
+
+// Lazy reports whether the tools ended up behind the search/select pair. Safe to
+// call before the servers have connected, when the answer is simply "not yet".
+func (s *mcpServers) Lazy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.catalog != nil
 }
 
 // Counts returns a snapshot of how many tools each server contributed, safe to
@@ -368,48 +445,135 @@ func (s *mcpServers) Counts() map[string]int {
 // A server that fails to start is reported and skipped, because a missing tool
 // is survivable while a missing model is not.
 func startMCP(cfg *config.Config) *mcpServers {
-	ss := &mcpServers{counts: map[string]int{}}
+	ss := &mcpServers{counts: map[string]int{}, failures: map[string]string{}}
 	defs := cfg.ActiveMCP()
 	if len(defs) == 0 {
 		return ss
 	}
-	for name, def := range defs {
-		// An OAuth block is carried across rather than shared, so config keeps no
-		// knowledge of the protocol and mcp keeps no dependency on config.
-		var oa *mcp.OAuth
-		if def.OAuth != nil {
-			oa = &mcp.OAuth{
-				Issuer:   def.OAuth.Issuer,
-				ClientID: def.OAuth.ClientID,
-				Scopes:   def.OAuth.Scopes,
-				Resource: def.OAuth.Resource,
-			}
-		}
-		// 15 seconds is plenty for a server that just answers, and nowhere near
-		// enough for one whose first request opens a browser and waits for a
-		// human to log in — so an OAuth server gets the whole flow's budget.
-		budget := 15 * time.Second
-		if oa != nil {
-			budget = 5 * time.Minute
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), budget)
-		c, err := mcp.Start(ctx, name, mcp.Server{
-			Command: def.Command,
-			Args:    def.Args,
-			Env:     def.Env,
-			Type:    def.Type,
-			URL:     def.URL,
-			Headers: def.Headers,
-			OAuth:   oa,
-		})
-		cancel()
+	// A server that may open a browser is connected before this returns, not
+	// after. Its flow prints the authorization URL to stderr and then waits up
+	// to five minutes for a human — and once the alternate screen is open, that
+	// instruction is written onto a screen that gets discarded, leaving the user
+	// staring at a prompt while a login they were never told about times out.
+	//
+	// Only the first authorization is interactive: a stored token refreshes
+	// without a browser. So this costs a wait once, on the run that was always
+	// going to be interrupted anyway.
+	eager, deferred := splitInteractive(defs)
+	for name, def := range eager {
+		c, err := startOneMCP(name, def)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "raunen: mcp %q not started — %s\n", name, err)
+			ss.failures[name] = err.Error()
 			continue
 		}
 		ss.clients = append(ss.clients, c)
 	}
+
+	if len(deferred) == 0 {
+		return ss
+	}
+	ss.connected = make(chan struct{})
+	go ss.dial(deferred)
 	return ss
+}
+
+// splitInteractive separates the servers that must be connected before the
+// terminal draws from those that can finish in the background.
+//
+// The test is whether the server might need a browser and has no token yet.
+// One that has been authorized before refreshes silently, so it goes in the
+// background with everything else.
+func splitInteractive(defs map[string]config.MCP) (eager, deferred map[string]config.MCP) {
+	eager, deferred = map[string]config.MCP{}, map[string]config.MCP{}
+	store := mcp.DefaultTokenStore()
+	for name, def := range defs {
+		if def.OAuth != nil && !hasToken(store, def) {
+			eager[name] = def
+			continue
+		}
+		deferred[name] = def
+	}
+	return eager, deferred
+}
+
+// hasToken reports whether a token is already stored for this server, in which
+// case authorizing it will not stop to ask anything.
+func hasToken(store mcp.TokenStore, def config.MCP) bool {
+	t, err := store.Load(def.OAuth.Issuer, def.OAuth.Resource)
+	return err == nil && t != nil
+}
+
+// dial connects to every server at once and closes connected when they have all
+// answered.
+//
+// Concurrent rather than sequential because the servers are independent: three
+// servers that each take a second cost a second between them, not three. A
+// slow or unreachable one no longer delays the ones behind it — it only spends
+// its own timeout.
+func (s *mcpServers) dial(defs map[string]config.MCP) {
+	defer close(s.connected)
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for name, def := range defs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, err := startOneMCP(name, def)
+			if err != nil {
+				// Still on stderr, which is what a one-shot or ACP run reads and
+				// where a terminal run that has not yet drawn will show it. The
+				// copy in failures is what survives the alternate screen.
+				fmt.Fprintf(os.Stderr, "raunen: mcp %q not started — %s\n", name, err)
+				s.mu.Lock()
+				s.failures[name] = err.Error()
+				s.mu.Unlock()
+				return
+			}
+			mu.Lock()
+			s.clients = append(s.clients, c)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	// Deterministic order regardless of which server answered first, so the
+	// tools are named and numbered the same way on every run.
+	sort.Slice(s.clients, func(i, j int) bool { return s.clients[i].Name() < s.clients[j].Name() })
+}
+
+// startOneMCP performs the handshake with a single server.
+func startOneMCP(name string, def config.MCP) (*mcp.Client, error) {
+	// An OAuth block is carried across rather than shared, so config keeps no
+	// knowledge of the protocol and mcp keeps no dependency on config.
+	var oa *mcp.OAuth
+	if def.OAuth != nil {
+		oa = &mcp.OAuth{
+			Issuer:   def.OAuth.Issuer,
+			ClientID: def.OAuth.ClientID,
+			Scopes:   def.OAuth.Scopes,
+			Resource: def.OAuth.Resource,
+		}
+	}
+	// 15 seconds is plenty for a server that just answers, and nowhere near
+	// enough for one whose first request opens a browser and waits for a
+	// human to log in — so an OAuth server gets the whole flow's budget.
+	budget := 15 * time.Second
+	if oa != nil {
+		budget = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	return mcp.Start(ctx, name, mcp.Server{
+		Command: def.Command,
+		Args:    def.Args,
+		Env:     def.Env,
+		Type:    def.Type,
+		URL:     def.URL,
+		Headers: def.Headers,
+		OAuth:   oa,
+	})
 }
 
 // discoverModel asks the configured endpoints what they serve and picks one,
@@ -448,9 +612,9 @@ func isLocal(baseURL string) bool {
 	return strings.Contains(baseURL, "localhost") || strings.Contains(baseURL, "127.0.0.1")
 }
 
-// fallbacks resolves the escalation ladder, skipping entries that do not
+// buildLadder resolves the escalation ladder, skipping entries that do not
 // resolve so one bad reference cannot break startup.
-func fallbacks(cfg *config.Config) []agent.Candidate {
+func buildLadder(cfg *config.Config) []agent.Candidate {
 	out := make([]agent.Candidate, 0, len(cfg.Fallback))
 	for _, ref := range cfg.Fallback {
 		p, model, err := cfg.Resolve(ref)

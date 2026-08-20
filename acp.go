@@ -107,7 +107,7 @@ func buildAgent(cfg *config.Config, cwd, modelRef string, mcpServers *mcpServers
 	ag.SetRef(ref)
 	ag.SetAutoSwitch(cfg.AutoSwitch)
 	ag.SetMaxSteps(cfg.MaxSteps)
-	ag.SetFallbacks(fallbacks(cfg))
+	ag.SetFallbacks(buildLadder(cfg))
 	if cfg.SubagentsEnabled() {
 		ag.EnableSubagents()
 	}

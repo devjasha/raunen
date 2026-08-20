@@ -111,7 +111,7 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 		// Shared like health: a denial must not be escapable by delegating past
 		// it, and a grant already given should not be asked for again.
 		perms:      a.perms,
-		fallbacks:  a.fallbacks,
+		fallbacks:  a.Ladder(),
 		autoSwitch: a.autoSwitch,
 		// The same backstop applies to the child: a looping sub-agent is the
 		// case it was added for.

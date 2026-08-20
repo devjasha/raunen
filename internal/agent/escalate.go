@@ -27,8 +27,13 @@ func (a *Agent) Held() []Note {
 }
 
 // Ladder reports the escalation ladder, for showing what will happen when this
-// model runs out of room.
-func (a *Agent) Ladder() []Candidate { return a.fallbacks }
+// model runs out of room. The copy is deliberate: the ladder may still be being
+// installed by the goroutine that discovers free models.
+func (a *Agent) Ladder() []Candidate {
+	a.ladderMu.Lock()
+	defer a.ladderMu.Unlock()
+	return append([]Candidate(nil), a.fallbacks...)
+}
 
 // why a move is being made, which decides what counts as an acceptable
 // destination. It is passed explicitly rather than inferred from the reason
@@ -47,7 +52,15 @@ const (
 
 // SetFallbacks installs the escalation ladder. It is tried in order, so larger
 // contexts belong later in the list.
-func (a *Agent) SetFallbacks(c []Candidate) { a.fallbacks = c }
+//
+// Safe to call while the agent is running: the discovered part of the ladder
+// costs a request to every provider, so it arrives after the first frame is
+// already on screen.
+func (a *Agent) SetFallbacks(c []Candidate) {
+	a.ladderMu.Lock()
+	defer a.ladderMu.Unlock()
+	a.fallbacks = c
+}
 
 // nextCandidate returns the next unused rung of the ladder, skipping any whose
 // context is known to be no larger than the current one — moving sideways would
@@ -57,7 +70,10 @@ func (a *Agent) SetFallbacks(c []Candidate) { a.fallbacks = c }
 // the ladder deliberately, and hosted models usually have room. Ordering is
 // treated as the user's intent rather than second-guessed.
 func (a *Agent) nextCandidate(why escalateWhy) (Candidate, bool) {
-	for i, c := range a.fallbacks {
+	a.ladderMu.Lock()
+	ladder := a.fallbacks
+	a.ladderMu.Unlock()
+	for i, c := range ladder {
 		if i < a.rung {
 			continue
 		}
@@ -93,12 +109,14 @@ func (a *Agent) escalate(why escalateWhy, reason string, out chan<- Event) bool 
 
 	from := a.ref
 	// Advance past this rung so a turn cannot loop between two models.
+	a.ladderMu.Lock()
 	for i, x := range a.fallbacks {
 		if x.Ref == c.Ref {
 			a.rung = i + 1
 			break
 		}
 	}
+	a.ladderMu.Unlock()
 
 	a.client = c.Client
 	a.ref = c.Ref

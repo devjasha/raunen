@@ -185,7 +185,7 @@ func fetchModels(cfg *config.Config) tea.Cmd {
 // already known — they come from the config and from counts held in this
 // process — so unlike models and branches there is nothing to fetch and the
 // list is complete the moment it opens.
-func newMCPPicker(cfg *config.Config, counts map[string]int, lazy bool) *picker {
+func newMCPPicker(cfg *config.Config, counts map[string]int, fails map[string]string, lazy bool) *picker {
 	names := cfg.MCPNames()
 	active := cfg.ActiveMCP()
 	note := make(map[string]string, len(names))
@@ -198,6 +198,11 @@ func newMCPPicker(cfg *config.Config, counts map[string]int, lazy bool) *picker 
 			note[n] = "off"
 		case counts[n] > 0:
 			note[n] = fmt.Sprintf("%d tools", counts[n])
+		case fails[n] != "":
+			// Verbatim, because the server's own words say what to fix — a
+			// missing binary and a refused token need different answers, and
+			// "not started" cannot tell them apart.
+			note[n] = fails[n]
 		default:
 			note[n] = "not started"
 		}
