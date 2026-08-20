@@ -182,6 +182,8 @@ resolved ladder on stderr.
 raunen                              # start the TUI in the current directory
 raunen -m ollama/qwen3:8b           # pick a model for this run
 raunen 'what does main.go do?'      # one-shot; stdout stays clean for pipes
+raunen --json 'what changed?'       # one-shot, machine-readable
+raunen --no-save 'quick question'   # one-shot, leaving no session behind
 raunen --continue                   # resume this directory's last session
 raunen --sessions                   # list saved sessions
 raunen --running                    # list running instances
@@ -1143,6 +1145,87 @@ a command that releases in 300ms rather than one that never releases.
 agent is what the key is for, and after clicking a message mid-turn the first
 press otherwise looked like it had been ignored.
 
+## Scripting
+
+A prompt as an argument runs one turn and exits. The answer goes to stdout and
+everything else — thinking, tool calls, switches, warnings — to stderr, so a
+pipe gets the reply and nothing else:
+
+```sh
+raunen 'summarise the diff on this branch' | pbcopy
+```
+
+That is the right shape when a person reads the result. When a *program* does,
+`--json` prints one document instead:
+
+```sh
+$ raunen --json 'what does main.go do?'
+{
+  "output": "It parses flags, loads the config, and starts either the TUI or a\nsingle one-shot turn.",
+  "exit_code": 0,
+  "model": "ollama/qwen3.5:latest",
+  "session_id": "20260820-091144-2ee0",
+  "steps": 2,
+  "tool_calls": [
+    { "name": "read", "status": "success" },
+    { "name": "grep", "status": "success" }
+  ],
+  "usage": { "prompt": 4192, "completion": 210, "total": 4402 }
+}
+```
+
+```sh
+raunen --json 'review this branch' | jq -r .output
+raunen --json 'do the thing' | jq -e '.tool_calls[] | select(.status=="error")'
+```
+
+**The document is printed even when the run fails**, with the reason in `error`.
+A consumer parsing stdout should never have to handle "sometimes there is JSON
+and sometimes there is not" — that is the whole reason for the mode:
+
+```json
+{
+  "output": "",
+  "error": "This request requires more credits, or fewer max_tokens.",
+  "exit_code": 1,
+  "model": "openrouter/moonshotai/kimi-k3",
+  "steps": 0,
+  "tool_calls": [],
+  "usage": { "prompt": 0, "completion": 0, "total": 0 }
+}
+```
+
+**`tool_calls` is always an array**, never `null`, so `.tool_calls | length`
+works on a turn that called nothing. A tool that failed is reported as
+`"status": "error"` with the message, but *does not fail the run*: the model is
+told and usually recovers, which is the tool working as intended rather than the
+turn going wrong.
+
+**`model` is the model that answered**, which is not always the one asked for —
+escalation moves up the ladder when the context fills, and reporting the model
+it was launched with would be a lie.
+
+| Exit | |
+|---|---|
+| `0` | the turn finished |
+| `1` | it failed; `error` says why |
+| `130` | interrupted with ctrl+c |
+
+130 is the shell's convention for SIGINT, and it is there so a script can tell
+"the user stopped this" from "the model failed" — those want different handling,
+and both used to exit `1`. An interrupted run still prints its document, with
+whatever the model had produced in `output`.
+
+**The session is saved either way.** A one-shot turn and an interactive one
+produce the same kind of conversation, so `raunen 'question'` followed by
+`raunen --continue` picks it up — which it did not before, and that was a bug
+rather than a policy. `--no-save` opts out for a throwaway question, and then
+`session_id` is empty rather than naming a session that was never written.
+
+The conversation is saved before the result is reported, so a turn that ran out
+of context is still resumable: what the model did before it failed is usually
+most of the work.
+
 ## Sub-agents
 
 The model can delegate a self-contained piece of investigation with the `task`
@@ -1502,7 +1585,8 @@ resize — wrapping is redone at the new width rather than baked in.
 ## Layout
 
 ```
-main.go                    CLI entry, one-shot mode
+main.go                    CLI entry, flags, wiring
+oneshot.go                 one-shot runs, --json and exit codes
 internal/agent             the tool-use loop, modes, compaction and trimming
 internal/companion         the mascot's progress across sessions
 internal/config            providers, models and skills
