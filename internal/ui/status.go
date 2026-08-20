@@ -265,6 +265,12 @@ func (m *Model) showMCP() tea.Cmd {
 		m.add(dimStyle.Render(fmt.Sprintf("  %-16s %s", n, state)))
 	}
 	line := fmt.Sprintf("  %d servers · %d tools", len(active), total)
+	// "not started" on its own says what happened and not what to do about it,
+	// and the reason has already scrolled past on stderr by the time anyone
+	// runs /mcp.
+	if total == 0 && len(active) > 0 {
+		m.add(dimStyle.Render("  /mcp <server> shows how one is configured"))
+	}
 	// Say when the tools are being held back, because otherwise a model that
 	// cannot see them looks like a bug rather than the point: the schemas are
 	// kept out of the request until one is asked for.
@@ -277,6 +283,76 @@ func (m *Model) showMCP() tea.Cmd {
 			"so a large catalogue costs no context until used"))
 	}
 	return nil
+}
+
+// showMCPServer reports one server in full: how it is reached, whether it is
+// running, and how many tools it brought. It exists because the list has one
+// line per server and a URL or a command line does not fit in it — and because
+// a server showing "not started" is the moment you want its definition in
+// front of you.
+func (m *Model) showMCPServer(name string) tea.Cmd {
+	m.blank()
+	m.push(entry{rule: true, stamp: "mcp " + name})
+
+	def, ok := m.cfg.MCP[name]
+	if !ok {
+		m.add(errStyle.Render("✗ no MCP server called " + name))
+		if names := m.cfg.MCPNames(); len(names) > 0 {
+			m.add(dimStyle.Render("  defined: " + strings.Join(names, ", ")))
+		}
+		return nil
+	}
+
+	row := func(k, v string) {
+		if v != "" {
+			m.add(dimStyle.Render(fmt.Sprintf("  %-10s %s", k, v)))
+		}
+	}
+	kind := def.Type
+	if kind == "" {
+		kind = "stdio"
+	}
+	row("transport", kind)
+	row("url", def.URL)
+	row("command", strings.TrimSpace(def.Command+" "+strings.Join(def.Args, " ")))
+	// Names only: the values are tokens, and a config listing is not worth
+	// printing a secret into the transcript for.
+	if len(def.Env) > 0 {
+		row("env", strings.Join(sortedKeys(def.Env), ", "))
+	}
+	if len(def.Headers) > 0 {
+		row("headers", strings.Join(sortedKeys(def.Headers), ", "))
+	}
+	if def.OAuth != nil {
+		row("oauth", "enabled")
+	}
+
+	_, on := m.cfg.ActiveMCP()[name]
+	counts := map[string]int{}
+	if m.mcp != nil {
+		counts = m.mcp()
+	}
+	switch {
+	case !on:
+		row("state", "off — not in mcp_enabled")
+	case counts[name] > 0:
+		row("state", fmt.Sprintf("running · %d tools", counts[name]))
+	default:
+		row("state", "not started — it failed to launch; "+
+			"raunen prints the reason on stderr at startup")
+	}
+	return nil
+}
+
+// sortedKeys returns a map's keys in a stable order, so a listing built from
+// one does not reshuffle between looks.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // showSkills lists what can be referenced with the skill mark, and how long
