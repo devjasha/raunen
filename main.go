@@ -62,6 +62,11 @@ func run() error {
 	)
 	flag.Parse()
 
+	// A subcommand rather than a flag: `raunen acp` starts a server that speaks
+	// a protocol on stdio and never draws anything, which is a different mode of
+	// operation from a flag that adjusts a run.
+	acpMode := flag.Arg(0) == "acp"
+
 	if *showVer {
 		fmt.Println("raunen", version)
 		return nil
@@ -97,6 +102,13 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "raunen: skill skipped —", p)
 	}
 	cfg.AddSkills(asConfigSkills(found))
+
+	// Serving the protocol takes over stdout, so it happens before anything
+	// that might print. Skills, project instructions and MCP are resolved per
+	// session against the directory the editor asks for, not this one.
+	if acpMode {
+		return serveACP(cfg, *modelRef)
+	}
 
 	if *listSess {
 		return printSessions(root)
