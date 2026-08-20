@@ -31,6 +31,10 @@ type Tool struct {
 	// the tool can do anything, but most of what a model runs while
 	// investigating is harmless.
 	ReadOnly func(args json.RawMessage) bool
+	// bounded records that Run has already been wrapped by the registry's
+	// output bound, so a tool that travels through Clone or Without is not
+	// wrapped a second time.
+	bounded bool
 }
 
 // IsReadOnly reports whether this specific invocation leaves state alone.
@@ -50,6 +54,13 @@ type Registry struct {
 	mu    sync.Mutex
 	tools map[string]Tool
 	order []string
+	// bound holds every result to a size and files the remainder in store. It
+	// lives on the registry rather than inside each tool so that a tool from
+	// anywhere — built in, MCP, added at runtime — is covered by construction.
+	// An MCP server is a third party, and "please keep your output short" is
+	// not something that can be asked of one.
+	bound func(tool, s string) string
+	store *Store
 	// gen counts changes to the toolset, so a caller that caches something
 	// derived from it — the measured cost of the schemas, say — can tell when
 	// its copy went stale without diffing the whole set.
@@ -75,6 +86,20 @@ func (r *Registry) addLocked(t Tool) {
 	if r.tools == nil {
 		r.tools = map[string]Tool{}
 	}
+	if r.bound != nil && !t.bounded && t.Run != nil {
+		inner, name := t.Run, t.Name
+		bound := r.bound
+		t.Run = func(ctx context.Context, args json.RawMessage) (string, error) {
+			out, err := inner(ctx, args)
+			// An error's text is short and is not evidence to page through, so
+			// it goes back as it is. Only a result is bounded.
+			if err != nil {
+				return out, err
+			}
+			return bound(name, out), nil
+		}
+		t.bounded = true
+	}
 	if _, seen := r.tools[t.Name]; !seen {
 		r.order = append(r.order, t.Name)
 	}
@@ -98,7 +123,7 @@ func (r *Registry) Names() []string {
 func (r *Registry) Clone() *Registry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := &Registry{}
+	out := &Registry{bound: r.bound, store: r.store}
 	for _, n := range r.order {
 		out.addLocked(r.tools[n])
 	}
@@ -118,7 +143,7 @@ func (r *Registry) Has(name string) bool {
 func (r *Registry) Without(name string) *Registry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := &Registry{}
+	out := &Registry{bound: r.bound, store: r.store}
 	for _, n := range r.order {
 		if n == name {
 			continue
@@ -186,23 +211,29 @@ func OutputBudget(contextTokens int) int {
 	return min(30<<10, max(2<<10, contextTokens))
 }
 
+// PreviewBudget returns how much of a large result goes into the conversation,
+// given the per-result budget.
+//
+// It is deliberately smaller than the budget it derives from. Once the rest of
+// the result is retrievable, the head is a sample rather than the answer: it is
+// there so the model can tell whether this is the result it wanted and what to
+// search for. Enough for a compile error and the frame above it, not enough for
+// a test suite's entire output.
+//
+// A quarter of the budget, floored so that a small window still shows something
+// worth reading and capped so a large one does not go back to pasting whole
+// files into the context.
+func PreviewBudget(maxOutput int) int {
+	return min(8<<10, max(2<<10, maxOutput/4))
+}
+
 // Default returns the standard toolset, rooted at the given working directory.
 // maxOutput caps how much any one result may return; see OutputBudget.
 func Default(root string, maxOutput int) *Registry {
 	r := &Registry{}
-
-	// truncate cleans a result, then keeps it from crowding out the
-	// conversation. Cleaning comes first so the budget is spent on content
-	// rather than on colour codes and progress bars, which also means the
-	// useful end of a long log is likelier to survive.
-	truncate := func(s string) string {
-		s = Clean(s)
-		if len(s) <= maxOutput {
-			return s
-		}
-		return s[:maxOutput] + fmt.Sprintf(
-			"\n... [truncated, %d bytes total — read a specific part if you need more]", len(s))
-	}
+	store := NewStore()
+	r.bound = boundResults(store, maxOutput)
+	r.store = store
 
 	// resolve keeps relative paths anchored to the session root. An empty path
 	// is rejected rather than silently resolving to the root directory, which
@@ -269,18 +300,22 @@ func Default(root string, maxOutput int) *Registry {
 				// handing to the model as a result.
 				return "", ctx.Err()
 			}
+			// How the command ended goes at the front, not the back. The
+			// result is bounded from the head, so a marker appended after the
+			// output is exactly the part that gets held back — and "did it
+			// fail" is the one thing the model must not have to page for.
 			if ctx.Err() == context.DeadlineExceeded {
-				return truncate(string(out)) + "\n[timed out]", nil
+				return "[timed out]\n" + string(out), nil
 			}
 			if err != nil {
 				// A non-zero exit is information for the model, not a failure
 				// of the tool itself.
-				return truncate(fmt.Sprintf("%s\n[exit: %v]", out, err)), nil
+				return fmt.Sprintf("[exit: %v]\n%s", err, out), nil
 			}
 			if len(out) == 0 {
 				return "[no output]", nil
 			}
-			return truncate(string(out)), nil
+			return string(out), nil
 		},
 	})
 
@@ -318,7 +353,7 @@ func Default(root string, maxOutput int) *Registry {
 			for i, line := range lines {
 				fmt.Fprintf(&sb, "%d\t%s\n", i+1, line)
 			}
-			return truncate(sb.String()), nil
+			return sb.String(), nil
 		},
 	})
 
@@ -396,7 +431,7 @@ func Default(root string, maxOutput int) *Registry {
 
 	// Finding things by name and by content, without going through bash: see
 	// search.go for why that is worth two tools of its own.
-	addSearch(r, root, truncate)
+	addSearch(r, root)
 
 	r.Add(Tool{
 		Name:        "list",
@@ -431,9 +466,11 @@ func Default(root string, maxOutput int) *Registry {
 			if sb.Len() == 0 {
 				return "[empty]", nil
 			}
-			return truncate(sb.String()), nil
+			return sb.String(), nil
 		},
 	})
+
+	addResult(r, store, maxOutput)
 
 	return r
 }

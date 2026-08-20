@@ -53,7 +53,7 @@ const (
 )
 
 // addSearch registers the search tools against a root directory.
-func addSearch(r *Registry, root string, truncate func(string) string) {
+func addSearch(r *Registry, root string) {
 	r.Add(Tool{
 		Name: "grep",
 		Description: "Search the project for a regular expression, returning " +
@@ -98,7 +98,7 @@ func addSearch(r *Registry, root string, truncate func(string) string) {
 			if err != nil {
 				return "", err
 			}
-			return truncate(grepFiles(root, files, re, a.FilesOnly, clampContext(a.Context))), nil
+			return grepFiles(root, files, re, a.FilesOnly, clampContext(a.Context)), nil
 		},
 	})
 
@@ -136,7 +136,7 @@ func addSearch(r *Registry, root string, truncate func(string) string) {
 				}
 				sb.WriteString(f + "\n")
 			}
-			return truncate(sb.String()), nil
+			return sb.String(), nil
 		},
 	})
 }
