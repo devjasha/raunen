@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { ReleaseBadge } from "./ReleaseBadge";
 
@@ -18,6 +19,7 @@ export function Header() {
         </Link>
         <nav>
           <ReleaseBadge />
+          <ThemeToggle />
           <Link to="/docs">Docs</Link>
           <Link to="/cost">Cost</Link>
           <a className="opt" href={REPO}>
@@ -26,6 +28,48 @@ export function Header() {
         </nav>
       </div>
     </header>
+  );
+}
+
+/** A light/dark toggle. The initial theme is whatever the head script already
+ *  applied (or the OS default); the toggle writes `data-theme` on <html> and
+ *  mirrors it into localStorage so the choice sticks and survives a reload
+ *  without a flash. Removing the attribute returns to following the OS. */
+export function ThemeToggle() {
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  useEffect(() => {
+    const current = document.documentElement.getAttribute("data-theme");
+    if (current === "dark" || current === "light") setTheme(current);
+    else {
+      const dark =
+        window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches;
+      setTheme(dark ? "dark" : "light");
+    }
+  }, []);
+
+  const toggle = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next);
+    try {
+      localStorage.setItem("raunen:theme", next);
+    } catch {
+      // Storage is optional; the toggle still works for the session.
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={toggle}
+      aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+      title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+    >
+      {theme === "dark" ? "☀" : "☾"}
+    </button>
   );
 }
 

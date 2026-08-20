@@ -66,6 +66,16 @@ function RootDocument({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
+        {/* Set the theme before first paint so a stored choice never flashes
+            the wrong one. An explicit attribute is only written when the
+            visitor has made a choice; otherwise the page follows the OS via the
+            media query in the stylesheet. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "(function(){try{var t=localStorage.getItem('raunen:theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();",
+          }}
+        />
         <HeadContent />
       </head>
       <body>
