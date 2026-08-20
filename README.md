@@ -55,7 +55,7 @@ running the script:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/devjasha/raunen/main/install.sh \
-  | RAUNEN_INSTALL_DIR=/usr/local/bin RAUNEN_VERSION=v0.1.0 sh
+  | RAUNEN_INSTALL_DIR=/usr/local/bin RAUNEN_VERSION=v0.7.0 sh
 ```
 
 Piping a script into a shell is worth reading first:
@@ -133,7 +133,7 @@ a browser:
 
 ```
 ─────────────────────────────────────────────────────────── status
-  version   v0.1.0
+  version   v0.7.0
   model     ollama/qwen3.5-8k:latest  ·  8192 tokens
   mode      auto
   context   940 of 8.2k  (11%)

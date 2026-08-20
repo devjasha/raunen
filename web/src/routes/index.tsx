@@ -337,7 +337,7 @@ function Home() {
               </div>
               <Term title="/status">
                 <D>{"─────────────────────────────────────────── status\n"}</D>
-                {"  version   v0.6.0\n"}
+                {"  version   v0.7.0\n"}
                 {"  model     "}
                 <U>{"ollama/qwen3.5-8k:latest"}</U>
                 {"  ·  8192\n"}
