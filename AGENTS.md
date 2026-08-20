@@ -16,6 +16,8 @@ or newer; the only dependencies are Bubble Tea and Lip Gloss.
 - `internal/agent` — the tool-use loop. Presentation-free: it emits typed
   `Event`s and knows nothing about the terminal. Keep it that way.
 - `internal/ui` — Bubble Tea model. Everything rendered goes through here.
+- `internal/acp` — Agent Client Protocol over stdio. A transport in front of
+  `agent.Agent`: it must never grow behaviour the terminal does not have.
 - `internal/provider` — OpenAI-compatible streaming client
 - `internal/tools` — the built-in tools, rooted at the working directory
 - `internal/fileset` — what git considers part of the project; shared by the

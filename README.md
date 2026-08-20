@@ -184,6 +184,7 @@ raunen -m ollama/qwen3:8b           # pick a model for this run
 raunen 'what does main.go do?'      # one-shot; stdout stays clean for pipes
 raunen --json 'what changed?'       # one-shot, machine-readable
 raunen --no-save 'quick question'   # one-shot, leaving no session behind
+raunen acp                          # serve the Agent Client Protocol on stdio
 raunen --continue                   # resume this directory's last session
 raunen --sessions                   # list saved sessions
 raunen --running                    # list running instances
@@ -1370,6 +1371,69 @@ The conversation is saved before the result is reported, so a turn that ran out
 of context is still resumable: what the model did before it failed is usually
 most of the work.
 
+## Editors
+
+`raunen acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+on stdin and stdout, so an editor can drive raunen the way it would any other
+coding agent. In Zed, that is an entry in `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "raunen": { "command": "raunen", "args": ["acp"] }
+  }
+}
+```
+
+It is the same agent the terminal runs. Same tools, same permission rules, same
+`AGENTS.md`, same skills, same escalation ladder — only the front end differs,
+which is the whole reason the loop was kept free of any knowledge of the
+terminal.
+
+What travels over the wire:
+
+| | |
+|---|---|
+| `initialize` | version and capabilities |
+| `session/new` · `session/load` | start, or reopen one saved on disk |
+| `session/prompt` | a turn, streamed as it happens |
+| `session/cancel` | stop the running turn |
+| `session/set_mode` | auto, accept edits, plan |
+| `session/request_permission` | the agent asking the editor |
+
+**The editor answers the approval prompts.** In accept-edits mode a tool that
+changes state pauses and asks, exactly as it does in the terminal; the dialogue
+appears in the editor instead of on the status row. "Allow and don't ask again"
+records the same narrow session grant `a` does — the verb of a command, or one
+file — and it applies to sub-agents too.
+
+**A working directory per session.** The editor says which project a session is
+for, and the tools, the `AGENTS.md` files and the skills are resolved against
+*that* directory rather than against wherever the server happens to have been
+started. An editor with three projects open gets three sessions that cannot read
+each other's files.
+
+**MCP servers offered by the client are ignored.** raunen starts the servers
+named in its own `mcp.json`, which is a file you control. Taking a server
+definition off the wire would let whatever is driving the connection run a
+subprocess of its choosing, which is a large door to open for a small
+convenience.
+
+**What ACP has no word for is still said.** Escalating to a roomier model,
+trimming old exchanges, resting a rate-limited endpoint, a sub-agent reporting
+back — none of these have an update in the protocol, because ACP describes what
+an agent is doing to your code rather than how it is managing a context window.
+They are sent as agent thoughts rather than dropped, because a user watching a
+spinner should not have to guess why it is slow.
+
+Stdout belongs to the protocol, so everything raunen would otherwise print goes
+to stderr: one stray line on stdout is an unparseable frame and a dead
+connection.
+
+Images and audio are declared unsupported in the handshake. raunen sends message
+content to the provider as a plain string, so promising otherwise would have an
+editor offer an attachment button that silently dropped the file.
+
 ## Sub-agents
 
 The model can delegate a self-contained piece of investigation with the `task`
@@ -1731,6 +1795,8 @@ resize — wrapping is redone at the new width rather than baked in.
 ```
 main.go                    CLI entry, flags, wiring
 oneshot.go                 one-shot runs, --json and exit codes
+acp.go                     the acp subcommand, and building an agent per directory
+internal/acp               Agent Client Protocol over stdio, for editors
 internal/agent             the tool-use loop, modes, compaction and trimming
 internal/companion         the mascot's progress across sessions
 internal/config            providers, models and saved skills
