@@ -167,12 +167,3 @@ func TestReadResourceToolViaRegistry(t *testing.T) {
 		t.Errorf("text resource not read through registry: %q", out)
 	}
 }
-
-func contains(xs []string, want string) bool {
-	for _, x := range xs {
-		if x == want {
-			return true
-		}
-	}
-	return false
-}
