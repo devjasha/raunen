@@ -293,7 +293,17 @@ type Model struct {
 	mcp func() map[string]int
 	// mcpLazy reports that the MCP tools are held in a catalogue rather than
 	// advertised, so /mcp can explain why the model does not see them directly.
-	mcpLazy bool
+	// A function for the same reason mcp is one: the servers connect after the
+	// first frame is drawn, so this is not known until they have answered.
+	mcpLazy func() bool
+	// mcpFails reports why each server did not start. A function like mcp, and
+	// for a sharper reason: the servers connect after the terminal has drawn, so
+	// a failure reported on stderr from then on would be written into the
+	// alternate screen and lost. /mcp is where it stays readable.
+	mcpFails func() map[string]string
+	// ready is closed once the work deferred past the first frame — connecting
+	// to MCP servers, building the fallback ladder — has finished. See SetReady.
+	ready <-chan struct{}
 	// project names the AGENTS.md files in force, for /status. Empty when the
 	// project has none, which is the common case and shows as a hint rather
 	// than as a missing row.
@@ -338,7 +348,32 @@ func (m *Model) SetMCPCounts(f func() map[string]int) { m.mcp = f }
 
 // SetMCPLazy records that the MCP tools are reached through search and select
 // rather than advertised on every request, so /mcp can say so.
-func (m *Model) SetMCPLazy(lazy bool) { m.mcpLazy = lazy }
+func (m *Model) SetMCPLazy(f func() bool) { m.mcpLazy = f }
+
+// SetMCPFailures installs a source for why servers did not start, shown in /mcp.
+func (m *Model) SetMCPFailures(f func() map[string]string) { m.mcpFails = f }
+
+// readyMsg says the deferred startup work has finished and carries the message
+// that arrived before it did, so the turn can be started for real.
+type readyMsg struct{ text string }
+
+// waitReady blocks in a command — off the UI goroutine — and hands the waiting
+// message back once the tools are in place.
+func waitReady(ready <-chan struct{}, text string) tea.Cmd {
+	return func() tea.Msg {
+		<-ready
+		return readyMsg{text: text}
+	}
+}
+
+// SetReady installs a gate that a turn waits on before it starts. It is how
+// startup hands the terminal a drawable frame before the MCP servers have
+// answered: the wiring lands on its own goroutine, and the first turn — which
+// cannot come before the user has typed — waits here for it.
+//
+// Waited on rather than polled because a fork copies the registry, so a turn
+// that started early would answer without those tools for its whole length.
+func (m *Model) SetReady(ready <-chan struct{}) { m.ready = ready }
 
 // SetProject records which instruction files were loaded, as a summary line for
 // /status. Instructions that quietly did not arrive look exactly like a model
@@ -1054,6 +1089,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		return m.onEvent(msg.turn, msg.ev)
+
+	case readyMsg:
+		// The tools have landed; the message that was waiting on them can go.
+		m.ready = nil
+		return m.send(msg.text)
 
 	case statusMsg:
 		m.showProviders(msg.providers)
@@ -1772,6 +1812,24 @@ func (m *Model) answer(ok bool) {
 
 // send starts a turn and begins pumping events from the agent.
 func (m *Model) send(text string) (tea.Model, tea.Cmd) {
+	// A turn forks the agent, and a fork copies the registry — so the MCP tools
+	// have to be in it before this runs. Startup defers connecting past the
+	// first frame, and this is where that debt is settled.
+	//
+	// Waited on in a command rather than inline, because this is the UI
+	// goroutine: blocking it would freeze the terminal until the slowest server
+	// answered — no repaint, no scrolling, and no ctrl+c, which is exactly when
+	// someone would reach for it. The message comes back as readyMsg and send
+	// runs again from the top. Checked before anything is allocated so the
+	// re-entry is a clean retry rather than a half-built turn.
+	if m.ready != nil {
+		select {
+		case <-m.ready:
+			m.ready = nil
+		default:
+			return *m, waitReady(m.ready, text)
+		}
+	}
 	// A reply carries what it is replying to, so the model does not have to
 	// guess which part of a long answer is meant. Markdown quoting is what it
 	// already understands. The quote is kept out of the echoed message so the
@@ -2511,7 +2569,12 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		if m.mcp != nil {
 			counts = m.mcp()
 		}
-		m.pick = newMCPPicker(m.cfg, counts, m.mcpLazy)
+		fails := map[string]string{}
+		if m.mcpFails != nil {
+			fails = m.mcpFails()
+		}
+		lazy := m.mcpLazy != nil && m.mcpLazy()
+		m.pick = newMCPPicker(m.cfg, counts, fails, lazy)
 		return *m, nil
 
 	case "/skills":

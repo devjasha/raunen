@@ -162,6 +162,12 @@ type Agent struct {
 	// what it moved away from.
 	ref string
 	// fallbacks is the escalation ladder; rung is how far up it we are.
+	//
+	// ladderMu guards fallbacks because the ladder is built by asking every
+	// provider for its catalogue, which is slow enough that startup does it on
+	// its own goroutine rather than making the user wait to type. So a turn can
+	// be reading the ladder while it is still being installed.
+	ladderMu   sync.Mutex
 	fallbacks  []Candidate
 	rung       int
 	autoSwitch bool
@@ -230,6 +236,11 @@ func New(c *provider.Client, r *tools.Registry, system string) *Agent {
 		messages:  []provider.Message{{Role: provider.System, Content: system}},
 	}
 }
+
+// SetTools swaps the registry. It exists for the startup paths that build the
+// toolset in two stages — the built-ins first, then whatever MCP contributed —
+// and must be called before the agent runs a turn.
+func (a *Agent) SetTools(r *tools.Registry) { a.tools = r }
 
 // SetRef records which "provider/model" is in use.
 func (a *Agent) SetRef(ref string) { a.ref = ref }
@@ -520,7 +531,7 @@ func (a *Agent) Fork() *Agent {
 		mode:          a.mode,
 		contextTokens: a.contextTokens,
 		ref:           a.ref,
-		fallbacks:     a.fallbacks,
+		fallbacks:     a.Ladder(),
 		autoSwitch:    a.autoSwitch,
 		maxSteps:      a.maxSteps,
 		health:        a.health,
