@@ -191,7 +191,7 @@ func TestSkillsCommandRenders(t *testing.T) {
 		// The description stands in for the prompt's own opening words when
 		// there is none.
 		{"undescribed", testSkills(), "Undo it cleanly."},
-		{"none", &config.Config{}, "no skills defined"},
+		{"none", &config.Config{}, "no skills found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ag := agent.New(provider.New("http://localhost:1/v1", "", "m"),

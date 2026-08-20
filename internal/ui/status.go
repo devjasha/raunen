@@ -15,6 +15,7 @@ import (
 	"raunen/internal/instructions"
 	"raunen/internal/permission"
 	"raunen/internal/provider"
+	"raunen/internal/skills"
 )
 
 // Version is stamped by main so /status can report it.
@@ -390,8 +391,9 @@ func (m *Model) showSkills() {
 
 	names := m.cfg.SkillNames()
 	if len(names) == 0 {
-		m.add(dimStyle.Render("no skills defined — see " + shortRoot(config.SkillsPath())))
-		m.add(dimStyle.Render(`  add one with a text editor: {"review": {"prompt": "…"}}`))
+		m.add(dimStyle.Render("no skills found"))
+		m.add(dimStyle.Render("  put one in skills/<name>/" + skills.Name +
+			", or in " + shortRoot(config.SkillsPath())))
 		return
 	}
 
@@ -404,6 +406,12 @@ func (m *Model) showSkills() {
 			detail = summarize(strings.TrimSpace(s.Prompt), 48)
 		}
 		m.add(dimStyle.Render(fmt.Sprintf("  %-16s %s", skillMark+n, detail)))
+		// Where it came from, when it came from a file. Two skills can share a
+		// name across a project and a home directory, and which one is winning
+		// is exactly what you want to know when the wrong one is used.
+		if s.Source != "" {
+			m.add(dimStyle.Render(fmt.Sprintf("  %-16s %s", "", shortRoot(s.Source))))
+		}
 	}
 	m.add(dimStyle.Render(fmt.Sprintf("  %d skills · reference one with %s<name> in a prompt",
 		len(names), skillMark)))

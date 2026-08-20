@@ -23,6 +23,7 @@ import (
 	"raunen/internal/permission"
 	"raunen/internal/provider"
 	"raunen/internal/session"
+	"raunen/internal/skills"
 	"raunen/internal/tools"
 	"raunen/internal/ui"
 )
@@ -77,16 +78,25 @@ func run() error {
 	// Skills live in their own file, so a broken one is reported and skipped
 	// rather than taken as a reason not to start: a prompt that cannot be
 	// expanded is survivable in a way that a missing model is not.
-	if skills, err := config.LoadSkills(); err != nil {
+	if saved, err := config.LoadSkills(); err != nil {
 		fmt.Fprintln(os.Stderr, "raunen: skills not loaded —", err)
 	} else {
-		cfg.Skills = skills
+		cfg.Skills = saved
 	}
 
 	root, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+
+	// SKILL.md directories, here and in the places other agents keep them, so a
+	// repository that already has skills works without being adapted. Folded in
+	// beside skills.json, which stays supported.
+	found := skills.Load(root, skills.UserDir(filepath.Dir(config.Path())))
+	for _, p := range found.Problems {
+		fmt.Fprintln(os.Stderr, "raunen: skill skipped —", p)
+	}
+	cfg.AddSkills(asConfigSkills(found))
 
 	if *listSess {
 		return printSessions(root)
@@ -659,4 +669,24 @@ func dim(s string) string {
 		return s
 	}
 	return "\x1b[90m" + s + "\x1b[0m"
+}
+
+// asConfigSkills converts what discovery found into the shape the rest of the
+// program already uses. The conversion lives here rather than in either package
+// so that config keeps no knowledge of SKILL.md and skills keeps none of the
+// config file — the same separation MCP and OAuth have.
+func asConfigSkills(found *skills.Set) map[string]config.Skill {
+	out := make(map[string]config.Skill, found.Len())
+	for _, name := range found.Names() {
+		sk, ok := found.Get(name)
+		if !ok {
+			continue
+		}
+		out[sk.Name] = config.Skill{
+			Description: sk.Description,
+			Prompt:      sk.Prompt,
+			Source:      sk.Path,
+		}
+	}
+	return out
 }
