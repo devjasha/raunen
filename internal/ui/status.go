@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -415,4 +416,99 @@ func (m *Model) showSkills() {
 	}
 	m.add(dimStyle.Render(fmt.Sprintf("  %d skills · reference one with %s<name> in a prompt",
 		len(names), skillMark)))
+}
+
+// mcpAuthMsg carries the outcome of a login attempt back to the UI goroutine.
+type mcpAuthMsg struct {
+	name    string
+	authURL string
+	err     error
+}
+
+// mcpAuth logs in to one server.
+//
+// This is the command that makes deferring an OAuth server safe. A login opens a
+// browser and waits for a human, and a server connecting in the background
+// cannot ask for that: anything it printed would go to a stderr nobody is
+// reading, behind the alternate screen. So it fails instead, and this is where
+// the login is run deliberately, with somewhere to show the result.
+func (m *Model) mcpAuth(name string) (tea.Model, tea.Cmd) {
+	def, ok := m.cfg.MCP[name]
+	if !ok {
+		m.blank()
+		m.add(errStyle.Render("✗ no MCP server called " + name))
+		if names := m.cfg.MCPNames(); len(names) > 0 {
+			m.add(dimStyle.Render("  defined: " + strings.Join(names, ", ")))
+		}
+		return *m, nil
+	}
+	if def.OAuth == nil {
+		m.blank()
+		m.add(errStyle.Render("✗ " + name + " does not use oauth"))
+		m.add(dimStyle.Render(`  add "oauth": {} to its definition, or give it headers`))
+		return *m, nil
+	}
+	if m.mcpLogin == nil {
+		m.blank()
+		m.add(errStyle.Render("✗ logging in is not available here"))
+		return *m, nil
+	}
+
+	m.blank()
+	m.add(dimStyle.Render("opening a browser to authorize " + name + "…"))
+	login := m.mcpLogin
+	// In a command, because the flow waits for a human: on the UI goroutine that
+	// would freeze the terminal for as long as the login took.
+	return *m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		u, err := login(ctx, name)
+		return mcpAuthMsg{name: name, authURL: u, err: err}
+	}
+}
+
+// showMCPAuthResult reports what the login did, and is where the authorization
+// URL surfaces when no browser could be opened — the one place it is certain to
+// be read.
+func (m *Model) showMCPAuthResult(msg mcpAuthMsg) {
+	m.blank()
+	if msg.err != nil {
+		m.add(errStyle.Render("✗ " + msg.name + " — " + msg.err.Error()))
+		if msg.authURL != "" {
+			m.add(dimStyle.Render("  visit this url to authorize:"))
+			m.add("  " + msg.authURL)
+		}
+		return
+	}
+	m.add(okStyle.Render("✓ authorized " + msg.name))
+	m.add(dimStyle.Render("  run /mcp reload, or restart, to connect it"))
+}
+
+// mcpLogoutServer drops one server's stored credentials.
+func (m *Model) mcpLogoutServer(name string) (tea.Model, tea.Cmd) {
+	def, ok := m.cfg.MCP[name]
+	if !ok {
+		m.blank()
+		m.add(errStyle.Render("✗ no MCP server called " + name))
+		return *m, nil
+	}
+	if def.OAuth == nil {
+		m.blank()
+		m.add(errStyle.Render("✗ " + name + " does not use oauth"))
+		return *m, nil
+	}
+	if m.mcpLogout == nil {
+		m.blank()
+		m.add(errStyle.Render("✗ logging out is not available here"))
+		return *m, nil
+	}
+	m.blank()
+	if err := m.mcpLogout(name); err != nil {
+		m.add(errStyle.Render("✗ " + name + " — " + err.Error()))
+		return *m, nil
+	}
+	// The server keeps running on the token it already holds: dropping the
+	// stored copy decides what happens next time, not what happens now.
+	m.add(okStyle.Render("✓ logged out of " + name))
+	return *m, nil
 }

@@ -830,6 +830,15 @@ func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- E
 
 	t, ok := a.tools.Get(name)
 	if !ok {
+		// A tool the model reached for may be one the registry knows about but
+		// has not loaded yet — an MCP tool behind the search/select pair. The
+		// right reply is the recovery ("load it first"), which the resolver
+		// supplies, not a dead-end "no such tool" that leaves the model stuck.
+		if hint, known := a.tools.Resolve(name); known {
+			err := fmt.Errorf("%s", hint)
+			out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
+			return err.Error(), err
+		}
 		err := fmt.Errorf("no such tool: %s", name)
 		out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
 		return err.Error(), err

@@ -106,6 +106,30 @@ function Mcp() {
         extra tools would cost more than the schemas they save.
       </p>
 
+      <h2>A server that logs in</h2>
+      <p>
+        A remote server that uses OAuth connects like any other: deferred, so the
+        terminal draws first and the handshake finishes in the background. What was
+        never right was blocking for it — its login prints a URL and waits for a
+        browser, and once the terminal has taken over the screen that instruction
+        has nowhere to go. So a server that needs a login simply fails to connect
+        and says so in <code>/mcp</code>, in the server's own words.
+      </p>
+      <p>
+        Log in deliberately, when there is a terminal to read the URL, with{" "}
+        <code>/mcp auth</code>. It opens a browser and, if one cannot be, shows the
+        URL in the transcript to finish by hand. The stored token is what makes the
+        next run connect quietly.
+      </p>
+      <Term title="terminal">
+        {"/mcp auth github"}
+      </Term>
+      <p>
+        <code>/mcp logout</code> drops a server's stored token. The server keeps
+        running on the token it already holds, so logout decides the next run, not
+        this one.
+      </p>
+
       <h2>Seeing what loaded</h2>
       <p>
         <code>/mcp</code> lists what is defined, what is active, and how many tools

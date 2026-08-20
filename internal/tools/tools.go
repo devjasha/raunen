@@ -65,6 +65,21 @@ type Registry struct {
 	// derived from it — the measured cost of the schemas, say — can tell when
 	// its copy went stale without diffing the whole set.
 	gen uint64
+
+	// resolver, when set, knows about tools that are reachable but not yet
+	// registered — a lazily catalogued MCP tool, say. It is consulted when a
+	// call misses the registry so dispatch can recover (tell the model to load
+	// it) instead of answering with a bare "no such tool".
+	resolver func(name string) (hint string, known bool)
+}
+
+// SetResolver registers a fallback consulted when a tool name is not found. The
+// hint it returns is handed back to the model so it can reach the tool; known
+// is false when the resolver has never heard of the name and the miss is real.
+func (r *Registry) SetResolver(fn func(name string) (hint string, known bool)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolver = fn
 }
 
 // Generation reports a counter that changes whenever a tool is added. It exists
@@ -158,6 +173,19 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	defer r.mu.Unlock()
 	t, ok := r.tools[name]
 	return t, ok
+}
+
+// Resolve consults the fallback, if any, for a name that is reachable but not
+// registered. A nil resolver, or a name the resolver does not recognise, reports
+// known=false so the caller can fall back to a plain "no such tool".
+func (r *Registry) Resolve(name string) (hint string, known bool) {
+	r.mu.Lock()
+	fn := r.resolver
+	r.mu.Unlock()
+	if fn == nil {
+		return "", false
+	}
+	return fn(name)
 }
 
 // Schemas renders the registry in the shape the API expects.

@@ -303,3 +303,16 @@ func (c *Catalog) nearLocked(want string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// Advertised reports whether name is a tool this catalogue is holding back
+// rather than one the model can already call. It is what lets dispatch tell a
+// model "load it first" instead of "no such tool": the name is known to raunen
+// but lives behind mcp_select_tool, so the right reply is the recovery, not a
+// dead end. fx calls these "advertised dynamic tool names" and gives them the
+// same recovery path.
+func (c *Catalog) Advertised(name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.entries[name]
+	return ok
+}
