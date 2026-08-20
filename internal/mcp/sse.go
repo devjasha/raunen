@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,6 +31,9 @@ type sseTransport struct {
 	url     string
 	headers map[string]string
 	client  *http.Client
+	// oauth supplies the bearer token and re-runs the flow after a 401, when the
+	// server was configured with an OAuth block. nil otherwise.
+	oauth *tokenSource
 
 	mu        sync.Mutex
 	nextID    int
@@ -65,6 +69,9 @@ func newSSE(name string, s Server) (*sseTransport, error) {
 		cancel:  cancel,
 		nextID:  1,
 	}
+	if s.OAuth != nil {
+		t.oauth = newTokenSource(s.URL, *s.OAuth, s.TokenStore, s.OpenBrowser)
+	}
 	go t.stream(ctx)
 	return t, nil
 }
@@ -93,7 +100,7 @@ func (s *sseTransport) request(ctx context.Context, method string, params any) (
 
 	// The POST carries the call; the result normally comes back in the POST body,
 	// but a 202 with an empty body means the server routes it over the GET stream.
-	raw, err := s.post(ctx, method, id, params)
+	raw, err := s.postAuth(ctx, method, id, params)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +126,29 @@ func (s *sseTransport) request(ctx context.Context, method string, params any) (
 func (s *sseTransport) notify(ctx context.Context, method string, params any) error {
 	// A notification has no id; id 0 marshals to nothing (omitempty), so the
 	// server reads it as a notification and answers 202.
-	_, err := s.post(ctx, method, 0, params)
+	_, err := s.postAuth(ctx, method, 0, params)
 	return err
+}
+
+// postAuth sends the POST and, when the server rejects the token, refreshes or
+// re-authorizes ONCE before retrying. Once and no more: looping on a server
+// that refuses a fresh token would reopen the browser without end.
+func (s *sseTransport) postAuth(ctx context.Context, method string, id int, params any) (json.RawMessage, error) {
+	raw, err := s.post(ctx, method, id, params)
+	var ue *unauthorizedError
+	if s.oauth == nil || !errors.As(err, &ue) {
+		// Anything that is not an authorization failure settles the question of
+		// whether this server wants a token at all, which is what the SSE GET
+		// stream waits on before it dares open.
+		if s.oauth != nil {
+			s.oauth.settle()
+		}
+		return raw, err
+	}
+	if aerr := s.oauth.reauthorize(ctx, ue.token, ue.challenge); aerr != nil {
+		return nil, fmt.Errorf("mcp %q: %w", s.name, aerr)
+	}
+	return s.post(ctx, method, id, params)
 }
 
 // post sends one JSON-RPC POST and returns the peeled result body. It mirrors
@@ -142,6 +170,14 @@ func (s *sseTransport) post(ctx context.Context, method string, id int, params a
 		req.Header.Set("Mcp-Session-Id", s.sessionID)
 	}
 	s.mu.Unlock()
+	var bearer string
+	if s.oauth != nil {
+		bearer = s.oauth.bearer(ctx)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+	}
+	// Configured headers come last so an explicit Authorization still wins.
 	for k, v := range s.headers {
 		req.Header.Set(k, v)
 	}
@@ -158,6 +194,16 @@ func (s *sseTransport) post(ctx context.Context, method string, id int, params a
 	s.mu.Unlock()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
+		// Reported as its own type so postAuth can retry it with a fresh token
+		// rather than surfacing it as a plain protocol failure.
+		if s.oauth != nil && needsAuth(resp) {
+			return nil, &unauthorizedError{
+				status:    resp.StatusCode,
+				challenge: authChallenge(resp),
+				token:     bearer,
+				body:      strings.TrimSpace(string(b)),
+			}
+		}
 		var env struct {
 			Error *rpcError `json:"error"`
 		}
@@ -198,6 +244,19 @@ func (s *sseTransport) stream(getCtx context.Context) {
 		return
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	// A server that gates the POST gates the stream too, so the GET has to wait
+	// for a token rather than race the first POST to it. Opening the stream
+	// unauthenticated would earn a 401, and a 401 here ends the stream for good —
+	// there is no retry, the transport is simply dead. The first POST runs the
+	// login; this waits for it.
+	if s.oauth != nil {
+		if !s.oauth.wait(getCtx) {
+			return
+		}
+		if b := s.oauth.bearer(getCtx); b != "" {
+			req.Header.Set("Authorization", "Bearer "+b)
+		}
+	}
 	s.mu.Lock()
 	if s.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", s.sessionID)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +25,10 @@ type httpTransport struct {
 	url     string
 	headers map[string]string
 	client  *http.Client
+	// oauth, when the server was configured with an OAuth block, supplies the
+	// bearer token for each request and re-runs the flow after a 401. nil means
+	// the server is unauthenticated or carries a static Authorization header.
+	oauth *tokenSource
 
 	mu        sync.Mutex
 	nextID    int
@@ -36,13 +41,17 @@ type httpTransport struct {
 }
 
 func newHTTP(name string, s Server) (*httpTransport, error) {
-	return &httpTransport{
+	h := &httpTransport{
 		name:    name,
 		url:     s.URL,
 		headers: s.Headers,
 		client:  &http.Client{Timeout: 30 * time.Second},
 		nextID:  1,
-	}, nil
+	}
+	if s.OAuth != nil {
+		h.oauth = newTokenSource(s.URL, *s.OAuth, s.TokenStore, s.OpenBrowser)
+	}
+	return h, nil
 }
 
 func (h *httpTransport) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
@@ -50,7 +59,7 @@ func (h *httpTransport) request(ctx context.Context, method string, params any) 
 	defer h.mu.Unlock()
 	id := h.nextID
 	h.nextID++
-	return h.do(ctx, method, id, params)
+	return h.doAuth(ctx, method, id, params)
 }
 
 func (h *httpTransport) notify(ctx context.Context, method string, params any) error {
@@ -58,7 +67,7 @@ func (h *httpTransport) notify(ctx context.Context, method string, params any) e
 	defer h.mu.Unlock()
 	// A notification has no id; id 0 marshals to nothing because the field is
 	// omitempty, so the server reads it as a notification and answers 202.
-	_, err := h.do(ctx, method, 0, params)
+	_, err := h.doAuth(ctx, method, 0, params)
 	return err
 }
 
@@ -69,6 +78,28 @@ func (h *httpTransport) OnNotification(cb func(method string, params json.RawMes
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.notifyCB = cb
+}
+
+// doAuth sends the request and, if the server rejects the token, refreshes or
+// re-authorizes ONCE and retries. Exactly once: a server that answers 401 to a
+// freshly minted token is broken, and looping on it would reopen the browser
+// forever. The caller holds mu.
+func (h *httpTransport) doAuth(ctx context.Context, method string, id int, params any) (json.RawMessage, error) {
+	raw, err := h.do(ctx, method, id, params)
+	var ue *unauthorizedError
+	if h.oauth == nil || !errors.As(err, &ue) {
+		// Anything that is not an authorization failure settles the question of
+		// whether this server wants a token at all, which is what the SSE GET
+		// stream waits on before it dares open.
+		if h.oauth != nil {
+			h.oauth.settle()
+		}
+		return raw, err
+	}
+	if aerr := h.oauth.reauthorize(ctx, ue.token, ue.challenge); aerr != nil {
+		return nil, fmt.Errorf("mcp %q: %w", h.name, aerr)
+	}
+	return h.do(ctx, method, id, params)
 }
 
 // do sends one POST and returns the result body. The caller holds mu, so it is
@@ -87,6 +118,14 @@ func (h *httpTransport) do(ctx context.Context, method string, id int, params an
 	if h.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", h.sessionID)
 	}
+	var bearer string
+	if h.oauth != nil {
+		bearer = h.oauth.bearer(ctx)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+	}
+	// Configured headers come last so an explicit Authorization still wins.
 	for k, v := range h.headers {
 		req.Header.Set(k, v)
 	}
@@ -103,6 +142,16 @@ func (h *httpTransport) do(ctx context.Context, method string, id int, params an
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
+		// An authorization failure is reported as its own type so doAuth can
+		// tell it apart from every other 4xx and retry with a fresh token.
+		if h.oauth != nil && needsAuth(resp) {
+			return nil, &unauthorizedError{
+				status:    resp.StatusCode,
+				challenge: authChallenge(resp),
+				token:     bearer,
+				body:      strings.TrimSpace(string(b)),
+			}
+		}
 		// A non-2xx may still carry a JSON-RPC error body. Decode it so a 400
 		// with an error object reports the server's code and message rather than
 		// a bare status line; fall back to the raw status + body otherwise.
