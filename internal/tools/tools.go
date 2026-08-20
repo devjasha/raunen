@@ -394,6 +394,10 @@ func Default(root string, maxOutput int) *Registry {
 		},
 	})
 
+	// Finding things by name and by content, without going through bash: see
+	// search.go for why that is worth two tools of its own.
+	addSearch(r, root, truncate)
+
 	r.Add(Tool{
 		Name:        "list",
 		Description: "List files and directories at a path.",

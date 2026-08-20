@@ -533,8 +533,8 @@ approve  n decline` — and the agent is blocked until answered. The mode is als
 written into the system prompt, so the model knows the rules instead of learning
 them by collecting refusals.
 
-**How "changes state" is decided.** `read` and `list` never do; `write` and
-`edit` always do. `bash` is the awkward one: it can do anything, so it counts as
+**How "changes state" is decided.** `read`, `list`, `grep` and `glob` never do;
+`write` and `edit` always do. `bash` is the awkward one: it can do anything, so it counts as
 mutating unless the command matches a conservative allowlist (`ls`, `cat`,
 `grep`, `rg`, `find`, `git status|log|diff|show`, and similar). Redirection,
 command substitution, env-var prefixes, absolute paths and anything unrecognised
@@ -1254,6 +1254,74 @@ delegation cannot launder a write past a refusal. It **cannot delegate further**
 the child is built without the `task` tool, so recursion is impossible by
 construction rather than by a depth counter.
 
+## Searching
+
+`grep` finds text, `glob` finds files:
+
+```
+  ⏺ grep  func Start
+    ↳ 7 lines
+
+  ⏺ glob  **/*_test.go
+    ↳ 9 lines
+```
+
+Both could be done through `bash` — `grep` and `rg` are on its allowlist, and
+models reach for them readily. Three things are wrong with that, and they are
+the reason these exist as tools.
+
+**`bash` is not portable.** `rg` is not installed everywhere, BSD and GNU `grep`
+disagree on flags, and the model cannot tell which it is talking to until a
+command fails. Every session spent tokens rediscovering that.
+
+**`bash` is not gated for searching.** It counts as mutating unless the command
+matches the allowlist, so a search with a pipe or a redirect in it asks for
+approval in accept mode and is *refused outright in plan mode* — the one mode
+where investigating is all there is to do. `grep` and `glob` never change
+anything, so they always run.
+
+**`grep -r` is not bounded.** It walks `node_modules` and `.git`, then returns a
+megabyte of minified JavaScript that gets truncated to the first 30 KB. The
+answer is in there somewhere.
+
+**What gets searched is what git says the project is** — everything tracked,
+plus everything untracked that is not ignored. That is the right list by
+definition and it honours `.gitignore` for free. Outside a repository it walks
+the tree instead, minus the directories that are never the answer. The same
+listing backs `@` completion, so what the model can search and what you can
+mention are the same set of files by construction.
+
+Results are sized to be read rather than truncated: 200 matches in total, 20 per
+file, long lines clipped, binaries skipped by sniffing for a null byte. When a
+cap is hit it says so and suggests narrowing, because silently returning the
+first twenty of four hundred matches is how a model concludes something does not
+exist.
+
+```
+grep  pattern            RE2 regular expression
+      path               limit to a directory, or one file
+      glob               limit to matching paths, e.g. *.go
+      ignore_case        match case-insensitively
+      files_only         names only — much cheaper when you just need to know where
+      context            0-5 lines either side
+
+glob  pattern            *.go, internal/**/*.json, **/README.md
+      path               limit to a directory
+```
+
+A glob with no slash in it matches the base name anywhere in the tree, so
+`*.go` means what you would expect rather than only matching the top level.
+`**` spans directories, and `a/**/b` matches `a/b` too — zero is a number of
+directories.
+
+`files_only` is worth reaching for. A broad search across a large repository
+costs a few hundred tokens as a list of paths and several thousand as lines,
+and knowing which six files to open is usually the actual question.
+
+The two tools cost about 290 tokens of schema on every request. That is the
+argument for their descriptions being terse: on a 4k local model the toolset is
+already the largest fixed cost in the window.
+
 ## Tool output cleaning
 
 Command output is written for a terminal, not for a model. Before a result is
@@ -1440,7 +1508,9 @@ internal/companion         the mascot's progress across sessions
 internal/config            providers, models and skills
 internal/provider          OpenAI-compatible streaming client
 internal/session           saving, resuming, running instances
-internal/tools             bash, read, write, edit, list
+internal/fileset           what git considers part of the project
+internal/instructions      AGENTS.md discovery
+internal/tools             bash, read, write, edit, grep, glob, list
 internal/ui                Bubble Tea TUI
 internal/vcs               git branch for the status bar, and switching it
 contrib/raunen-picker      tmux session picker
