@@ -24,6 +24,7 @@ type pickKind int
 const (
 	pickModel pickKind = iota
 	pickBranch
+	pickMCP
 )
 
 // picker is the chooser: a small overlay above the input, listing what the
@@ -41,15 +42,29 @@ type picker struct {
 	err      error
 	// cfg lets the list float pinned models to the top and mark them.
 	cfg *config.Config
+	// note holds a short right-hand annotation per entry — how many tools an
+	// MCP server brought, or that it never started. Kept beside the entries
+	// rather than in them so what is selected stays the bare name.
+	note map[string]string
+	// hint is a word about the list as a whole, shown beside the count. It
+	// carries what the old /mcp listing said in its footer and would otherwise
+	// have nowhere to go.
+	hint string
 }
 
 // noun names what is being chosen, for the counts in the search line.
 func (p *picker) noun(n int) string {
-	if p.kind == pickBranch {
+	switch p.kind {
+	case pickBranch:
 		if n == 1 {
 			return "branch"
 		}
 		return "branches"
+	case pickMCP:
+		if n == 1 {
+			return "server"
+		}
+		return "servers"
 	}
 	if n == 1 {
 		return "model"
@@ -164,6 +179,39 @@ func fetchModels(cfg *config.Config) tea.Cmd {
 		}
 		return modelsMsg{models: all, needsKey: needs}
 	}
+}
+
+// newMCPPicker builds the chooser for /mcp with no argument. The servers are
+// already known — they come from the config and from counts held in this
+// process — so unlike models and branches there is nothing to fetch and the
+// list is complete the moment it opens.
+func newMCPPicker(cfg *config.Config, counts map[string]int, lazy bool) *picker {
+	names := cfg.MCPNames()
+	active := cfg.ActiveMCP()
+	note := make(map[string]string, len(names))
+	total := 0
+	for _, n := range names {
+		_, on := active[n]
+		total += counts[n]
+		switch {
+		case !on:
+			note[n] = "off"
+		case counts[n] > 0:
+			note[n] = fmt.Sprintf("%d tools", counts[n])
+		default:
+			note[n] = "not started"
+		}
+	}
+	// The same two facts the old listing ended with: how many tools are in
+	// reach altogether, and whether they are held back from the request until
+	// the model asks for one.
+	hint := fmt.Sprintf("%d tools", total)
+	if lazy {
+		hint += " · searched on demand"
+	}
+	p := &picker{kind: pickMCP, cfg: cfg, note: note, hint: hint}
+	p.setItems(names)
+	return p
 }
 
 // sortFavourites moves pinned models above the rest, preserving their order
@@ -337,6 +385,16 @@ func (p *picker) height() int {
 	return min(len(p.filtered), pickerRows) + 3
 }
 
+// noteCol is where annotations start: past the longest entry, so they line up
+// in a column of their own.
+func (p *picker) noteCol() int {
+	w := 0
+	for _, s := range p.all {
+		w = max(w, lipgloss.Width(s))
+	}
+	return w + 2
+}
+
 // render draws the picker at the given width. Only foreground colours are used,
 // so the overlay stays transparent like everything else.
 func (p *picker) render(width int, current string) string {
@@ -354,6 +412,9 @@ func (p *picker) render(width int, current string) string {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("   %d of %d", len(p.filtered), len(p.all))))
 	case len(p.all) > 0:
 		b.WriteString(dimStyle.Render(fmt.Sprintf("   %d %s", len(p.all), p.noun(len(p.all)))))
+		if p.hint != "" {
+			b.WriteString(dimStyle.Render(" · " + p.hint))
+		}
 	}
 	b.WriteString("\n")
 
@@ -383,9 +444,15 @@ func (p *picker) render(width int, current string) string {
 			} else if p.kind == pickModel && p.cfg != nil && p.cfg.IsFavourite(line) {
 				marker = favMarker
 			}
+			// An annotation the list carries for the entry — for MCP, what
+			// state the server is in. Padded to a column so the states read
+			// down the overlay rather than zig-zagging after the names.
+			suffix := ""
+			if n := p.note[line]; n != "" {
+				suffix = strings.Repeat(" ", max(2, p.noteCol()-lipgloss.Width(line))) + n
+			}
 			// Flag a model whose provider has no key: its catalogue lists but
 			// its completions will not run.
-			suffix := ""
 			if p.needsKey != nil {
 				if prov, _, ok := strings.Cut(line, "/"); ok {
 					if env := p.needsKey[prov]; env != "" {

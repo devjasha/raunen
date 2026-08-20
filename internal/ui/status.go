@@ -220,68 +220,15 @@ func ansiPad(s string, w int) string {
 	return s
 }
 
-// showMCP lists the configured MCP servers and how many tools each brought
-// into the session. A server that is defined but not started shows its tools as
-// zero, which is the clue that its command failed to launch.
+// showMCP explains that there is nothing to choose between. With servers
+// defined, /mcp opens the chooser instead; this is the dead end that needs
+// saying, so it points at the file where a server is defined.
 func (m *Model) showMCP() tea.Cmd {
 	m.blank()
 	m.push(entry{rule: true, stamp: "mcp"})
 
-	defs := m.cfg.MCP
-	if len(defs) == 0 {
-		m.add(dimStyle.Render("no MCP servers configured — see mcp.json"))
-		m.add(dimStyle.Render("  add one with a text editor, or /status to see what loaded"))
-		return nil
-	}
-
-	active := m.cfg.ActiveMCP()
-	// Stable order for a list whose contents are meaningful.
-	names := make([]string, 0, len(defs))
-	for n := range defs {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-
-	// Read the counts once so every row in this listing agrees, even if a server
-	// refreshes its toolset while we are rendering.
-	counts := map[string]int{}
-	if m.mcp != nil {
-		counts = m.mcp()
-	}
-
-	total := 0
-	for _, n := range names {
-		_, on := active[n]
-		count := counts[n]
-		total += count
-		state := dimStyle.Render("off")
-		if on {
-			if count > 0 {
-				state = okStyle.Render(fmt.Sprintf("%d tools", count))
-			} else {
-				state = errStyle.Render("not started")
-			}
-		}
-		m.add(dimStyle.Render(fmt.Sprintf("  %-16s %s", n, state)))
-	}
-	line := fmt.Sprintf("  %d servers · %d tools", len(active), total)
-	// "not started" on its own says what happened and not what to do about it,
-	// and the reason has already scrolled past on stderr by the time anyone
-	// runs /mcp.
-	if total == 0 && len(active) > 0 {
-		m.add(dimStyle.Render("  /mcp <server> shows how one is configured"))
-	}
-	// Say when the tools are being held back, because otherwise a model that
-	// cannot see them looks like a bug rather than the point: the schemas are
-	// kept out of the request until one is asked for.
-	if m.mcpLazy {
-		line += " · searched on demand"
-	}
-	m.add(dimStyle.Render(line))
-	if m.mcpLazy {
-		m.add(dimStyle.Render("  the model finds them with mcp_search_tools, " +
-			"so a large catalogue costs no context until used"))
-	}
+	m.add(dimStyle.Render("no MCP servers configured — see mcp.json"))
+	m.add(dimStyle.Render("  add one with a text editor, or /status to see what loaded"))
 	return nil
 }
 
