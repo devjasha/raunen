@@ -18,6 +18,8 @@ or newer; the only dependencies are Bubble Tea and Lip Gloss.
 - `internal/ui` — Bubble Tea model. Everything rendered goes through here.
 - `internal/provider` — OpenAI-compatible streaming client
 - `internal/tools` — the built-in tools, rooted at the working directory
+- `internal/fileset` — what git considers part of the project; shared by the
+  search tools and by `@` completion, so the two cannot disagree
 - `internal/mcp` — MCP client: stdio, HTTP and SSE transports, OAuth 2.1
 - `internal/config` — config, skills and MCP definitions on disk
 - `web/` — the marketing and docs site, deployed separately. Not the agent.

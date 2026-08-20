@@ -2,15 +2,14 @@ package ui
 
 import (
 	"context"
-	"io/fs"
-	"os/exec"
 	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"raunen/internal/fileset"
 )
 
 // fileIndex is a snapshot of what is under the session root, kept so that an
@@ -42,14 +41,6 @@ const (
 	scanTimeout = 3 * time.Second
 )
 
-// skipDirs are directories never worth offering. They are where the bulk of a
-// tree usually is, and none of it is what someone means by "this file".
-var skipDirs = map[string]bool{
-	".git": true, "node_modules": true, "vendor": true, "target": true,
-	"dist": true, "build": true, ".next": true, ".venv": true,
-	"__pycache__": true, ".cache": true, ".idea": true, "venv": true,
-}
-
 // filesMsg carries a finished scan back to the model.
 type filesMsg struct{ index *fileIndex }
 
@@ -61,90 +52,15 @@ func scanFiles(root string) tea.Cmd {
 }
 
 // buildIndex lists the files under root and derives the directories from them.
-func buildIndex(root string) *fileIndex {
-	files, ok := gitFiles(root)
-	if !ok {
-		files = walkFiles(root)
-	}
-	return &fileIndex{paths: withDirs(files), at: time.Now()}
-}
-
-// gitFiles asks git for the files it knows about: everything tracked, plus
-// everything untracked that is not ignored. That is the right list by
-// definition — it is the project as the project defines itself — and it comes
-// with .gitignore honoured for free, which is otherwise a parser's worth of
-// work to approximate badly.
 //
-// The second return reports whether git answered at all, which is what
-// separates "not a repository" from "a repository with no files in it".
-func gitFiles(root string) ([]string, bool) {
+// The listing itself belongs to fileset, which the search tools use too: what
+// counts as part of the project is one question, and two answers to it would
+// drift apart the moment either was fixed.
+func buildIndex(root string) *fileIndex {
 	ctx, cancel := context.WithTimeout(context.Background(), scanTimeout)
 	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "git", "ls-files",
-		"--cached", "--others", "--exclude-standard", "-z")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, false
-	}
-
-	var files []string
-	for _, p := range strings.Split(string(out), "\x00") {
-		if p == "" {
-			continue
-		}
-		if len(files) >= maxIndexed {
-			break
-		}
-		if skipped(p) {
-			continue
-		}
-		files = append(files, p)
-	}
-	return files, true
-}
-
-// walkFiles is the fallback outside a repository: the same tree, minus the
-// directories that are never the answer.
-func walkFiles(root string) []string {
-	var files []string
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			// An unreadable directory is not a reason to abandon the rest.
-			return nil
-		}
-		if len(files) >= maxIndexed {
-			return fs.SkipAll
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil || rel == "." {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return fs.SkipDir
-			}
-			// Directories are derived from the files under them, so an empty
-			// one is simply not offered.
-			return nil
-		}
-		files = append(files, rel)
-		return nil
-	})
-	return files
-}
-
-// skipped reports whether a path lies under a directory not worth offering.
-// git honours .gitignore but knows nothing about which directories are noise.
-func skipped(p string) bool {
-	for _, part := range strings.Split(p, "/") {
-		if skipDirs[part] {
-			return true
-		}
-	}
-	return false
+	files, _ := fileset.List(ctx, root, maxIndexed)
+	return &fileIndex{paths: withDirs(files), at: time.Now()}
 }
 
 // withDirs adds the directories implied by the files, so that a folder can be
