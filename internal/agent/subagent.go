@@ -96,8 +96,13 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 	child := &Agent{
 		client: a.client,
 		// Without the task tool, so a sub-agent cannot spawn its own.
-		tools:         a.tools.Without("task"),
+		tools: a.tools.Without("task"),
+		// Its own instructions, but the same project. A sub-agent edits the same
+		// working directory as its caller, so a convention about how this
+		// repository is built applies to it just as much — and it has no other
+		// way to learn one, since it cannot see the conversation.
 		system:        subSystem,
+		project:       a.project,
 		mode:          a.mode,
 		contextTokens: a.contextTokens,
 		// Shared, not copied: what the child learns about a failing endpoint
@@ -110,8 +115,8 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 		maxSteps: a.maxSteps,
 		ref:      a.ref,
 		depth:    a.depth + 1,
-		messages: []provider.Message{{Role: provider.System, Content: subSystem + a.mode.guidance()}},
 	}
+	child.messages = []provider.Message{{Role: provider.System, Content: child.prompt()}}
 
 	events := make(chan Event, 64)
 	go child.run(ctx, args.Prompt, events)

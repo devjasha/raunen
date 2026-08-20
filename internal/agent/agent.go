@@ -193,6 +193,21 @@ type Agent struct {
 	// parent is the agent this one was forked from to answer a turn beside it,
 	// nil for the conversation itself. Merge hands the finished exchange back.
 	parent *Agent
+	// project is the AGENTS.md block for the working directory, appended to the
+	// system prompt. Kept apart from system so the mode guidance can be
+	// rewritten without losing it, and so a sub-agent can inherit the project's
+	// conventions while carrying its own instructions.
+	project string
+}
+
+// prompt composes the system message: the agent's own instructions, the rules
+// of the current mode, then the project's standing conventions.
+//
+// The project block goes last because it is the most specific thing in it, and
+// because the mode's rules must not be read as something a project file can
+// override — plan mode refuses to write whatever AGENTS.md says.
+func (a *Agent) prompt() string {
+	return a.system + a.mode.guidance() + a.project
 }
 
 func New(c *provider.Client, r *tools.Registry, system string) *Agent {
@@ -392,8 +407,24 @@ func (a *Agent) Mode() Mode { return a.mode }
 // them through refusals.
 func (a *Agent) SetMode(m Mode) {
 	a.mode = m
-	a.messages[0].Content = a.system + m.guidance()
+	a.messages[0].Content = a.prompt()
 }
+
+// SetProject installs the project instructions for the working directory,
+// assembled from its AGENTS.md files. Empty removes them.
+//
+// Applied to the live system message rather than only at construction, so
+// nothing has to be rebuilt when the files are re-read.
+func (a *Agent) SetProject(text string) {
+	a.project = ""
+	if t := strings.TrimSpace(text); t != "" {
+		a.project = "\n\n" + t
+	}
+	a.messages[0].Content = a.prompt()
+}
+
+// Project reports the instruction block in force, for /status.
+func (a *Agent) Project() string { return strings.TrimSpace(a.project) }
 
 // Model reports the model this agent talks to.
 func (a *Agent) Model() string { return a.client.Model }
@@ -464,6 +495,7 @@ func (a *Agent) Fork() *Agent {
 		client:        a.client,
 		tools:         a.tools,
 		system:        a.system,
+		project:       a.project,
 		mode:          a.mode,
 		contextTokens: a.contextTokens,
 		ref:           a.ref,
