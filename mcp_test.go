@@ -35,7 +35,7 @@ func TestStartMCPDoesNotBlock(t *testing.T) {
 	cfg := &config.Config{MCP: map[string]config.MCP{"slow": slowDef("3")}}
 
 	start := time.Now()
-	ss := startMCP(cfg)
+	ss := startMCP(cfg, true)
 	defer ss.Close()
 	elapsed := time.Since(start)
 
@@ -54,7 +54,7 @@ func TestServersDialConcurrently(t *testing.T) {
 		"c": slowDef("3"),
 	}}
 
-	ss := startMCP(cfg)
+	ss := startMCP(cfg, true)
 	defer ss.Close()
 
 	start := time.Now()
@@ -75,7 +75,7 @@ func TestServersDialConcurrently(t *testing.T) {
 // re-reads its toolset every step, which is what makes the late arrival safe.
 func TestAttachAddsToolsInPlace(t *testing.T) {
 	cfg := &config.Config{MCP: map[string]config.MCP{"mock": mockDef()}}
-	ss := startMCP(cfg)
+	ss := startMCP(cfg, true)
 	defer ss.Close()
 
 	reg := tools.Default(t.TempDir(), tools.OutputBudget(0))
@@ -95,7 +95,7 @@ func TestAttachAddsToolsInPlace(t *testing.T) {
 // readiness before its first turn while the background wiring is still running.
 func TestWaitIsRepeatable(t *testing.T) {
 	cfg := &config.Config{MCP: map[string]config.MCP{"mock": mockDef()}}
-	ss := startMCP(cfg)
+	ss := startMCP(cfg, true)
 	defer ss.Close()
 
 	done := make(chan struct{})
@@ -114,7 +114,7 @@ func TestWaitIsRepeatable(t *testing.T) {
 // With no servers configured there is nothing to wait for, and Wait must not
 // block on a channel that will never be closed.
 func TestWaitWithNoServersReturns(t *testing.T) {
-	ss := startMCP(&config.Config{})
+	ss := startMCP(&config.Config{}, true)
 	defer ss.Close()
 
 	done := make(chan struct{})
@@ -137,7 +137,7 @@ func TestFailureReasonIsKept(t *testing.T) {
 	cfg := &config.Config{MCP: map[string]config.MCP{
 		"broken": {Command: "/nonexistent/mcp-server"},
 	}}
-	ss := startMCP(cfg)
+	ss := startMCP(cfg, true)
 	defer ss.Close()
 	ss.Wait()
 
@@ -185,5 +185,34 @@ func TestAuthorizedOAuthServerIsDeferred(t *testing.T) {
 
 	if !hasToken(store, def) {
 		t.Fatal("a saved token was not found, so every run would wait for a browser")
+	}
+}
+
+// "required" is the user saying a turn is not worth starting without this
+// server. raunen cannot infer that, so the declaration is what decides.
+func TestRequiredServerIsEager(t *testing.T) {
+	defs := map[string]config.MCP{
+		"needed":   {Command: "true", Required: true},
+		"optional": {Command: "true"},
+	}
+	eager, deferred := splitInteractive(defs)
+
+	if _, ok := eager["needed"]; !ok {
+		t.Error(`a server marked "required" must be ready before the first turn`)
+	}
+	if _, ok := deferred["optional"]; !ok {
+		t.Error("an unmarked server should not hold up the first frame")
+	}
+}
+
+// Servers are optional by default, so an existing config keeps the fast start
+// it had before "required" existed.
+func TestServersAreOptionalByDefault(t *testing.T) {
+	eager, deferred := splitInteractive(map[string]config.MCP{"plain": {Command: "true"}})
+	if len(eager) != 0 {
+		t.Errorf("a plain server was made eager: %v", eager)
+	}
+	if len(deferred) != 1 {
+		t.Errorf("a plain server should be deferred: %v", deferred)
 	}
 }

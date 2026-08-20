@@ -122,7 +122,10 @@ func run() error {
 	// result. By the time the tools are wanted the handshakes are usually done.
 	// Failures are reported but do not stop startup: one broken server is not
 	// the whole session.
-	mcpServers := startMCP(cfg)
+	// Silent only when this run will draw: a prompt on the command line means a
+	// one-shot, which prints to stderr and never opens the alternate screen, so
+	// a headless login can still be completed there by hand.
+	mcpServers := startMCP(cfg, len(flag.Args()) == 0)
 	defer mcpServers.Close()
 
 	// The session is opened before the model is chosen, because a resumed
@@ -271,6 +274,11 @@ type mcpServers struct {
 	// between launching raunen and being able to type, so it happens off the
 	// startup path and anything that needs the tools waits here instead.
 	connected chan struct{}
+	// silent says a login prompt cannot be announced during background dialling,
+	// because the terminal is about to take over the screen. The one-shot and ACP
+	// runs leave it false: they draw nothing, so their stderr stays readable and
+	// a headless login can still be completed by hand.
+	silent bool
 	// failures records why each server did not start, keyed by server name.
 	//
 	// Kept rather than only printed because connecting now finishes after the
@@ -442,10 +450,10 @@ func (s *mcpServers) Counts() map[string]int {
 }
 
 // startMCP launches every enabled MCP server and collects those that came up.
-// A server that fails to start is reported and skipped, because a missing tool
-// is survivable while a missing model is not.
-func startMCP(cfg *config.Config) *mcpServers {
-	ss := &mcpServers{counts: map[string]int{}, failures: map[string]string{}}
+// silent says the caller is about to take over the screen, so a server that
+// would stop to ask for a login must not be left dialling in the background.
+func startMCP(cfg *config.Config, silent bool) *mcpServers {
+	ss := &mcpServers{counts: map[string]int{}, failures: map[string]string{}, silent: silent}
 	defs := cfg.ActiveMCP()
 	if len(defs) == 0 {
 		return ss
@@ -461,7 +469,7 @@ func startMCP(cfg *config.Config) *mcpServers {
 	// going to be interrupted anyway.
 	eager, deferred := splitInteractive(defs)
 	for name, def := range eager {
-		c, err := startOneMCP(name, def)
+		c, err := startOneMCP(name, def, true)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "raunen: mcp %q not started — %s\n", name, err)
 			ss.failures[name] = err.Error()
@@ -481,14 +489,20 @@ func startMCP(cfg *config.Config) *mcpServers {
 // splitInteractive separates the servers that must be connected before the
 // terminal draws from those that can finish in the background.
 //
-// The test is whether the server might need a browser and has no token yet.
-// One that has been authorized before refreshes silently, so it goes in the
-// background with everything else.
+// Two reasons to be eager. "required" is the user saying a turn is not worth
+// starting without this server, which is the honest way to express it: raunen
+// cannot know that a workflow depends on one particular toolset.
+//
+// The other is inferred, and narrower. A server that may open a browser prints
+// nothing useful once the alternate screen is up — the login instruction would
+// be written onto a screen that is discarded — so an OAuth server with no token
+// yet is connected while there is still a terminal to talk to. One that has been
+// authorized before refreshes silently and goes in the background with the rest.
 func splitInteractive(defs map[string]config.MCP) (eager, deferred map[string]config.MCP) {
 	eager, deferred = map[string]config.MCP{}, map[string]config.MCP{}
 	store := mcp.DefaultTokenStore()
 	for name, def := range defs {
-		if def.OAuth != nil && !hasToken(store, def) {
+		if def.Required || (def.OAuth != nil && !hasToken(store, def)) {
 			eager[name] = def
 			continue
 		}
@@ -520,7 +534,7 @@ func (s *mcpServers) dial(defs map[string]config.MCP) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c, err := startOneMCP(name, def)
+			c, err := startOneMCP(name, def, !s.silent)
 			if err != nil {
 				// Still on stderr, which is what a one-shot or ACP run reads and
 				// where a terminal run that has not yet drawn will show it. The
@@ -544,7 +558,10 @@ func (s *mcpServers) dial(defs map[string]config.MCP) {
 }
 
 // startOneMCP performs the handshake with a single server.
-func startOneMCP(name string, def config.MCP) (*mcp.Client, error) {
+// startOneMCP performs the handshake with a single server. visible says whether
+// anything the flow prints can still be read — true before the terminal hands
+// itself to the alternate screen, false once a background connect is racing it.
+func startOneMCP(name string, def config.MCP, visible bool) (*mcp.Client, error) {
 	// An OAuth block is carried across rather than shared, so config keeps no
 	// knowledge of the protocol and mcp keeps no dependency on config.
 	var oa *mcp.OAuth
@@ -563,16 +580,28 @@ func startOneMCP(name string, def config.MCP) (*mcp.Client, error) {
 	if oa != nil {
 		budget = 5 * time.Minute
 	}
+	// Where a login cannot be announced, one is not started. Falling back to
+	// printing the url only helps when someone is reading stderr; a server
+	// connecting behind the alternate screen would print onto a surface that is
+	// discarded and then wait minutes for a browser nobody was told to expect.
+	// Failing instead puts the reason in /mcp, where it can be read.
+	open := mcp.OpenBrowserOrPrint
+	if !visible {
+		open = func(string) error {
+			return fmt.Errorf("raunen was already running; authorize it with a fresh start")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	return mcp.Start(ctx, name, mcp.Server{
-		Command: def.Command,
-		Args:    def.Args,
-		Env:     def.Env,
-		Type:    def.Type,
-		URL:     def.URL,
-		Headers: def.Headers,
-		OAuth:   oa,
+		Command:     def.Command,
+		Args:        def.Args,
+		Env:         def.Env,
+		Type:        def.Type,
+		URL:         def.URL,
+		Headers:     def.Headers,
+		OAuth:       oa,
+		OpenBrowser: open,
 	})
 }
 

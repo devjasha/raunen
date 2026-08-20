@@ -32,7 +32,7 @@ func serveACP(cfg *config.Config, modelRef string) error {
 	// One set of MCP servers for the process rather than per session: they are
 	// subprocesses, and starting another copy for every session an editor opens
 	// would multiply them without bound.
-	mcpServers := startMCP(cfg)
+	mcpServers := startMCP(cfg, false)
 	defer mcpServers.Close()
 
 	build := func(cwd string) (*agent.Agent, *session.Session, acp.Expander, error) {

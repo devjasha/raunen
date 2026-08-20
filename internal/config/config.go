@@ -138,6 +138,15 @@ type MCP struct {
 	// means discover everything from the server — while leaving the block out
 	// entirely means no OAuth, which is what every existing config says.
 	OAuth *MCPOAuth `json:"oauth,omitempty"`
+	// Required makes the first turn wait for this server to be ready. Servers
+	// are optional by default: connecting happens in the background so the
+	// terminal draws immediately, and a server that is slow or broken costs
+	// nothing but its own tools.
+	//
+	// Set it when a turn is not worth starting without this server — a workflow
+	// built around one particular toolset — and accept that its handshake is
+	// then part of how long raunen takes to start.
+	Required bool `json:"required,omitempty"`
 }
 
 // MCPOAuth pins the parts of the OAuth flow that discovery cannot work out on
