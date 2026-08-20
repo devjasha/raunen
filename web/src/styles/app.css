@@ -361,6 +361,52 @@ nav a.opt {
   white-space: pre;
 }
 
+/* The pixel-art dragon. Squares are painted with theme-aware fills so the same
+   SVG reads on a light or dark page; `crispEdges` keeps the pixels sharp. */
+.dragon-hero,
+.dragon-stage {
+  display: block;
+  image-rendering: pixelated;
+}
+
+.dragon-hero {
+  height: 7rem;
+  width: auto;
+  margin: 0 0 2rem;
+}
+
+.dragon-stage {
+  height: 11rem;
+  width: auto;
+  align-self: center;
+}
+
+.px-g {
+  fill: var(--accent);
+}
+.px-l {
+  fill: color-mix(in srgb, var(--accent) 78%, white);
+}
+.px-y {
+  fill: color-mix(in srgb, var(--accent) 70%, hsl(48, 90%, 60%));
+}
+.px-o {
+  fill: color-mix(in srgb, var(--accent) 55%, black);
+}
+.px-r {
+  fill: hsl(0, 70%, 50%);
+}
+.px-w {
+  stroke: var(--fg-strong);
+  fill: none;
+}
+.px-p {
+  fill: var(--bg);
+}
+.px-glow {
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 80%, white));
+}
+
 h1 {
   font-size: 1.875rem;
   margin: 0 0 0.75rem;
@@ -430,12 +476,33 @@ button.copy:hover {
 /* ── terminal frame ─────────────────────────────────────────────────── */
 
 /* The stage: a soft-lit plinth the terminal sits on, giving the hero a
-   focal point. The glow echoes the accent without a hard edge. */
+   focal point. The glow echoes the accent without a hard edge. The dragon
+   stands beside the terminal so both read at a glance. */
 .stage {
   background: var(--stage);
   border-radius: calc(var(--radius) + 8px);
   padding: 2.5rem 2rem;
   margin: 0 0 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+  gap: 2.5rem;
+  align-items: center;
+}
+
+.stage-term {
+  min-width: 0;
+}
+
+@media (max-width: 44rem) {
+  .stage {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+    justify-items: center;
+    text-align: center;
+  }
+  .dragon-stage {
+    height: 7rem;
+  }
 }
 
 .term {

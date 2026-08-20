@@ -11,7 +11,7 @@ import {
   D,
   G,
 } from "../components/Chrome";
-import { DRAGON } from "../components/dragon";
+import { DRAGON, DragonArt } from "../components/dragon";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -34,9 +34,7 @@ function Home() {
       <main>
         <div className="hero">
           <div className="wrap">
-            <pre className="dragon" aria-hidden="true">
-              {DRAGON}
-            </pre>
+            <DragonArt className="dragon-hero" />
 
             <h1>A small terminal agent for local LLMs.</h1>
             <p className="tagline">
@@ -57,27 +55,30 @@ function Home() {
 
         <div className="wrap">
           <div className="stage">
-          <Term title="~/Projects/raunen">
-            <D>{"  ──────────────────────────────────────────────────────── 10:42\n"}</D>
-            <U>{"  ▌ what does main.go do?\n"}</U>
-            {"\n"}
-            <T>{"    ⏺ read"}</T>
-            {"  main.go\n"}
-            <D>{"      ↳ 84 lines\n"}</D>
-            {"\n"}
-            {"  It parses flags, loads the config, and starts either the TUI or a\n"}
-            {"  single one-shot turn.\n"}
-            {"\n"}
-            <D>
-              {"  • --continue resumes the last session for the directory\n"}
-              {"  • a prompt as an argument skips the UI entirely\n"}
-            </D>
-            {"\n"}
-            {"  ╭────────────────────────────────────────────────────────────╮\n"}
-            {"  │ ›                                                          │\n"}
-            {"  ╰────────────────────────────────────────────────────────────╯\n"}
-            <D>{"  auto · ⎇ main · qwen3.5-8k:latest · ██░░░░░░░░ 22% · 1.8k"}</D>
-          </Term>
+            <DragonArt className="dragon-stage" />
+            <div className="stage-term">
+              <Term title="~/Projects/raunen">
+                <D>{"  ──────────────────────────────────────────────────────── 10:42\n"}</D>
+                <U>{"  ▌ what does main.go do?\n"}</U>
+                {"\n"}
+                <T>{"    ⏺ read"}</T>
+                {"  main.go\n"}
+                <D>{"      ↳ 84 lines\n"}</D>
+                {"\n"}
+                {"  It parses flags, loads the config, and starts either the TUI or a\n"}
+                {"  single one-shot turn.\n"}
+                {"\n"}
+                <D>
+                  {"  • --continue resumes the last session for the directory\n"}
+                  {"  • a prompt as an argument skips the UI entirely\n"}
+                </D>
+                {"\n"}
+                {"  ╭────────────────────────────────────────────────────────────╮\n"}
+                {"  │ ›                                                          │\n"}
+                {"  ╰────────────────────────────────────────────────────────────╯\n"}
+                <D>{"  auto · ⎇ main · qwen3.5-8k:latest · ██░░░░░░░░ 22% · 1.8k"}</D>
+              </Term>
+            </div>
           </div>
         </div>
 
