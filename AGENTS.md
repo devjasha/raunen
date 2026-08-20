@@ -20,6 +20,8 @@ or newer; the only dependencies are Bubble Tea and Lip Gloss.
 - `internal/tools` — the built-in tools, rooted at the working directory
 - `internal/fileset` — what git considers part of the project; shared by the
   search tools and by `@` completion, so the two cannot disagree
+- `internal/permission` — standing allow/deny rules. Gating lives in one place,
+  `Agent.dispatch`; a tool must never decide its own permissions
 - `internal/mcp` — MCP client: stdio, HTTP and SSE transports, OAuth 2.1
 - `internal/config` — config, skills and MCP definitions on disk
 - `web/` — the marketing and docs site, deployed separately. Not the agent.

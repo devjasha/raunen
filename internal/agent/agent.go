@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"raunen/internal/permission"
 	"raunen/internal/provider"
 	"raunen/internal/tools"
 )
@@ -193,6 +194,11 @@ type Agent struct {
 	// parent is the agent this one was forked from to answer a turn beside it,
 	// nil for the conversation itself. Merge hands the finished exchange back.
 	parent *Agent
+	// perms are the standing permission rules and this session's grants. Shared
+	// with sub-agents and forks by pointer: a grant made once should not have to
+	// be made again for a delegated task, and a denial must not be escapable by
+	// delegating past it.
+	perms *permission.Set
 	// project is the AGENTS.md block for the working directory, appended to the
 	// system prompt. Kept apart from system so the mode guidance can be
 	// rewritten without losing it, and so a sub-agent can inherit the project's
@@ -218,6 +224,7 @@ func New(c *provider.Client, r *tools.Registry, system string) *Agent {
 		client:    c,
 		tools:     r,
 		health:    newHealth(),
+		perms:     &permission.Set{},
 		approving: &sync.Mutex{},
 		system:    system,
 		messages:  []provider.Message{{Role: provider.System, Content: system}},
@@ -426,6 +433,20 @@ func (a *Agent) SetProject(text string) {
 // Project reports the instruction block in force, for /status.
 func (a *Agent) Project() string { return strings.TrimSpace(a.project) }
 
+// SetPermissions installs the standing rules. Shared with sub-agents and forks,
+// so a grant made once covers the whole tree and a denial cannot be escaped by
+// delegating past it.
+func (a *Agent) SetPermissions(p *permission.Set) {
+	if p == nil {
+		p = &permission.Set{}
+	}
+	a.perms = p
+}
+
+// Permissions reports the rules in force, for /permissions and to record a
+// grant when the user answers "don't ask again".
+func (a *Agent) Permissions() *permission.Set { return a.perms }
+
 // Model reports the model this agent talks to.
 func (a *Agent) Model() string { return a.client.Model }
 
@@ -503,6 +524,7 @@ func (a *Agent) Fork() *Agent {
 		autoSwitch:    a.autoSwitch,
 		maxSteps:      a.maxSteps,
 		health:        a.health,
+		perms:         a.perms,
 		approving:     a.approving,
 		parent:        a,
 		messages:      append([]provider.Message(nil), a.messages...),
@@ -810,6 +832,17 @@ func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- E
 		return err.Error(), err
 	}
 
+	// A denial applies in every mode, read-only tools included. "Never touch
+	// the lockfile" is not advice about accept mode, and auto mode is where an
+	// unattended agent most needs the rule to hold.
+	decision, rule, matched := a.perms.Decide(name, permission.Target(json.RawMessage(args)))
+	if matched && decision == permission.Deny {
+		err := fmt.Errorf("refused: a permission rule denies %s %q", name, rule.Pattern)
+		out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
+		return fmt.Sprintf("refused: the rule %q denies this. "+
+			"Do not retry it; find another way or ask the user.", rule.Display()), err
+	}
+
 	// Mode gating happens here rather than inside the tools, so every tool is
 	// covered by the same rule and a new tool cannot forget to check.
 	if !t.IsReadOnly(json.RawMessage(args)) {
@@ -820,10 +853,15 @@ func (a *Agent) dispatch(ctx context.Context, tc provider.ToolCall, out chan<- E
 			// Returned as a tool result so the model adapts instead of stalling.
 			return "refused: plan mode is read-only. Propose the change instead of making it.", err
 		case ModeAccept:
-			if !a.approve(ctx, tc, out) {
-				err := fmt.Errorf("declined by user")
-				out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
-				return "the user declined this change. Ask what to do differently.", err
+			// An allow rule is what makes accept mode usable: without it the
+			// twentieth identical prompt gets approved without being read,
+			// which looks like oversight and is not.
+			if !(matched && decision == permission.Allow) {
+				if !a.approve(ctx, tc, out) {
+					err := fmt.Errorf("declined by user")
+					out <- ToolEnd{Name: name, Err: err, Depth: a.depth}
+					return "the user declined this change. Ask what to do differently.", err
+				}
 			}
 		}
 	}

@@ -13,6 +13,7 @@ import (
 
 	"raunen/internal/config"
 	"raunen/internal/instructions"
+	"raunen/internal/permission"
 	"raunen/internal/provider"
 )
 
@@ -181,6 +182,18 @@ func (m *Model) status() {
 		}
 	}
 
+	// Counted rather than listed: /permissions is where they are read. The row
+	// is here so a rule that is quietly doing something is at least visible
+	// from the dashboard.
+	if n := len(m.ag.Permissions().Rules()); n > 0 {
+		g := len(m.ag.Permissions().Grants())
+		line := fmt.Sprintf("%d %s", n, plural(n, "rule", "rules"))
+		if g > 0 {
+			line += fmt.Sprintf(", %d granted this session", g)
+		}
+		row("perms", dimStyle.Render(line+"  ·  /permissions"))
+	}
+
 	subs := "off"
 	if m.cfg.SubagentsEnabled() {
 		subs = "on"
@@ -311,6 +324,60 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// plural picks the right word for a count, so a status row does not read
+// "1 rules".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// showPermissions lists what runs without asking, and what can never run.
+//
+// A rule nobody can see is a rule nobody can trust: the point of writing them
+// down was to stop approving prompts without reading them, and that only works
+// if the standing answer is inspectable.
+func (m *Model) showPermissions() {
+	m.blank()
+	m.push(entry{rule: true, stamp: "permissions"})
+
+	perms := m.ag.Permissions()
+	rules, grants := perms.Rules(), perms.Grants()
+
+	if len(rules) == 0 && len(grants) == 0 {
+		m.add(dimStyle.Render("no rules — every change asks, per the mode"))
+		m.add(dimStyle.Render(`  add some under "permissions" in ` + shortRoot(config.Path())))
+		m.add(dimStyle.Render(`  e.g. {"bash": {"git *": "allow", "git push *": "deny"}}`))
+		return
+	}
+
+	// Listed in the order they are matched, so the reason one rule beats
+	// another is visible rather than something to work out from the sort.
+	show := func(r permission.Rule) {
+		style := dimStyle
+		switch r.Decision {
+		case permission.Allow:
+			style = okStyle
+		case permission.Deny:
+			style = errStyle
+		}
+		m.add(dimStyle.Render(fmt.Sprintf("  %-28s ", r.Display())) +
+			style.Render(r.Decision.String()))
+	}
+
+	for _, r := range rules {
+		show(r)
+	}
+	if len(grants) > 0 {
+		m.add(dimStyle.Render("  granted this session:"))
+		for _, r := range grants {
+			show(r)
+		}
+	}
+	m.add(dimStyle.Render("  most specific first · a deny holds in every mode"))
 }
 
 // showSkills lists what can be referenced with the skill mark, and how long

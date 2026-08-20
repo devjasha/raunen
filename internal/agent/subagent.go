@@ -107,7 +107,10 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 		contextTokens: a.contextTokens,
 		// Shared, not copied: what the child learns about a failing endpoint
 		// should spare the caller from finding out again.
-		health:     a.health,
+		health: a.health,
+		// Shared like health: a denial must not be escapable by delegating past
+		// it, and a grant already given should not be asked for again.
+		perms:      a.perms,
 		fallbacks:  a.fallbacks,
 		autoSwitch: a.autoSwitch,
 		// The same backstop applies to the child: a looping sub-agent is the
