@@ -32,7 +32,7 @@ function Install() {
         <T>{"$"}</T>
         {" curl -fsSL https://raw.githubusercontent.com/devjasha/\\\n"}
         {"    raunen/main/install.sh \\\n"}
-        {"  | RAUNEN_INSTALL_DIR=/usr/local/bin RAUNEN_VERSION=v0.1.0 sh"}
+        {"  | RAUNEN_INSTALL_DIR=/usr/local/bin RAUNEN_VERSION=v0.6.0 sh"}
       </Term>
 
       <div className="note">

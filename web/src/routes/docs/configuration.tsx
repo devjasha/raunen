@@ -114,9 +114,25 @@ function Configuration() {
           <Link to="/docs/mcp">MCP</Link>.
         </li>
         <li>
+          <code>~/.config/raunen/skills.json</code> — saved skills (the newer{" "}
+          <code>SKILL.md</code> directories are preferred; both are merged). See{" "}
+          <Link to="/docs/skills">skills &amp; instructions</Link>.
+        </li>
+        <li>
+          <code>~/.config/raunen/AGENTS.md</code> — instructions applied to every
+          project you open. See{" "}
+          <Link to="/docs/skills">skills &amp; instructions</Link>.
+        </li>
+        <li>
           <code>~/.local/share/raunen/</code> — sessions and the companion's state.
         </li>
       </ul>
+      <p>
+        The <code>permissions</code> and <code>subagents</code> keys live in{" "}
+        <code>config.json</code> itself. See <Link to="/docs/modes">modes</Link> for
+        permission rules, and <Link to="/docs/subagents">sub-agents</Link> for
+        turning delegation off.
+      </p>
       <p>
         <code>raunen -config</code> prints the config path.
       </p>

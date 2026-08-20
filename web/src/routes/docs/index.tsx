@@ -42,6 +42,15 @@ function Overview() {
           <code>/help</code> lists.
         </li>
         <li>
+          <Link to="/docs/skills">Skills &amp; instructions</Link> — named skills
+          you pull in with <code>#</code>, and project-wide guidance from{" "}
+          <code>AGENTS.md</code>.
+        </li>
+        <li>
+          <Link to="/docs/scripting">Scripting</Link> — one-shot prompts and
+          machine-readable <code>--json</code> output.
+        </li>
+        <li>
           <Link to="/docs/models">Models &amp; ladders</Link> — choosing one, and
           escalating when it runs out of room.
         </li>

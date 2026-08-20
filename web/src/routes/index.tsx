@@ -100,11 +100,11 @@ function Home() {
                 </p>
               </div>
               <div className="cell">
-                <h3>Five tools</h3>
+                <h3>Seven tools</h3>
                 <p>
                   <code>read</code>, <code>write</code>, <code>edit</code>,{" "}
-                  <code>list</code>, <code>bash</code> — plus anything an MCP server
-                  brings along.
+                  <code>list</code>, <code>bash</code>, <code>grep</code> and{" "}
+                  <code>glob</code> — plus anything an MCP server brings along.
                 </p>
               </div>
               <div className="cell">
@@ -203,7 +203,7 @@ function Home() {
               </div>
               <Term title="/status">
                 <D>{"─────────────────────────────────────────── status\n"}</D>
-                {"  version   v0.1.0\n"}
+                {"  version   v0.6.0\n"}
                 {"  model     "}
                 <U>{"ollama/qwen3.5-8k:latest"}</U>
                 {"  ·  8192\n"}
