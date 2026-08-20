@@ -1265,6 +1265,14 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return *m, nil
 		case "enter":
+			if m.pick.kind == pickMCP {
+				sel := m.pick.selected()
+				m.pick = nil
+				if sel == "" {
+					return *m, nil
+				}
+				return *m, m.showMCPServer(sel)
+			}
 			if m.pick.kind == pickBranch {
 				sel := m.pick.selected()
 				m.pick = nil
@@ -2428,7 +2436,19 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		if len(fields) > 1 {
 			return *m, m.showMCPServer(fields[1])
 		}
-		return *m, m.showMCP()
+		// No argument: offer the configured servers in the same overlay
+		// /model and /branch use, so picking one is the same gesture. With
+		// none defined there is nothing to choose between, so fall back to
+		// the listing, which says how to define one.
+		if len(m.cfg.MCP) == 0 {
+			return *m, m.showMCP()
+		}
+		counts := map[string]int{}
+		if m.mcp != nil {
+			counts = m.mcp()
+		}
+		m.pick = newMCPPicker(m.cfg, counts, m.mcpLazy)
+		return *m, nil
 
 	case "/skills":
 		m.showSkills()
@@ -2492,8 +2512,12 @@ func (m Model) View() tea.View {
 		// What counts as "current" depends on what is being chosen: the dot
 		// marks the model in use, or the branch checked out.
 		current := m.ref
-		if m.pick.kind == pickBranch {
+		switch m.pick.kind {
+		case pickBranch:
 			current = m.branch
+		case pickMCP:
+			// Nothing is "in use" among servers: they are all on at once.
+			current = ""
 		}
 		rows = append(rows, strings.Split(m.pick.render(m.innerWidth(), current), "\n")...)
 	}
