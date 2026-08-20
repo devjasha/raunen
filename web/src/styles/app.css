@@ -441,6 +441,35 @@ button.copy:hover {
   color: var(--ok);
 }
 
+/* A short list of reasons, between the hero terminal and the first section,
+   so a visitor answers "why this?" before scrolling. Four across on a wide
+   screen, collapsing to two then one as the viewport narrows. */
+.reasons {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1px;
+  background: var(--glass-border);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.reasons li {
+  background: var(--bg);
+  padding: 1.1rem 1.25rem;
+  font-size: 0.8125rem;
+  color: var(--fg-weak);
+  line-height: 1.55;
+}
+
+.reasons li strong {
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+
 /* ── sections ───────────────────────────────────────────────────────── */
 
 section {

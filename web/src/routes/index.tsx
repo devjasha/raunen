@@ -81,6 +81,28 @@ function Home() {
           </div>
         </div>
 
+        <div className="wrap">
+          <ul className="reasons">
+            <li>
+              <strong>Free to run.</strong> Point it at a local model and the bill
+              is zero; a hosted model is only used when a conversation outgrows the
+              window.
+            </li>
+            <li>
+              <strong>Tiny and self-contained.</strong> One ~3 MB Go binary, no
+              runtime, no server, no node_modules.
+            </li>
+            <li>
+              <strong>Yours alone.</strong> No account, no sign-in, no telemetry.
+              Your code never leaves the machine unless you point it somewhere.
+            </li>
+            <li>
+              <strong>It is the terminal.</strong> No separate window and no web
+              UI — the conversation lives where you already are.
+            </li>
+          </ul>
+        </div>
+
         <section>
           <div className="wrap">
             <h2>What it is</h2>
@@ -133,6 +155,21 @@ function Home() {
                 <p>
                   A bar in the status row, because running out of room is the most
                   common cause of a bad answer.
+                </p>
+              </div>
+              <div className="cell">
+                <h3>Skills &amp; instructions</h3>
+                <p>
+                  Save a checklist as a <code>SKILL.md</code> and pull it in with{" "}
+                  <code>#</code>, or drop an <code>AGENTS.md</code> in the repo so
+                  the agent learns the project's conventions.
+                </p>
+              </div>
+              <div className="cell">
+                <h3>Search without the shell</h3>
+                <p>
+                  <code>grep</code> and <code>glob</code> are first-class tools,
+                  not bash commands — so they always run and never trip plan mode.
                 </p>
               </div>
             </div>
@@ -299,6 +336,20 @@ function Home() {
               and picks one — preferring anything local. Read the{" "}
               <Link to="/docs">docs</Link> or the{" "}
               <a href={`${REPO}#readme`}>full README</a>.
+            </p>
+
+            <p className="lede" style={{ marginTop: "2.5rem", marginBottom: "0.75rem" }}>
+              Or skip the UI entirely and get one answer back:
+            </p>
+            <Term title="shell">
+              <T>{"$"}</T>
+              {" raunen --json 'summarise the diff on this branch'\n"}
+              <D>{"  → a single JSON document on stdout, ready for a script"}</D>
+            </Term>
+            <p className="beneath">
+              Pass a prompt as an argument for a one-shot turn, or{" "}
+              <code>--json</code> for machine-readable output with an exit status.
+              See <Link to="/docs/scripting">scripting</Link>.
             </p>
           </div>
         </section>
