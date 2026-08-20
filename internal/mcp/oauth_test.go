@@ -924,20 +924,22 @@ func TestOpenFailureIsNotFatal(t *testing.T) {
 	defer cancel()
 	var authURL string
 	var mu sync.Mutex
+	// The headless case: no desktop to open, but stderr is being read, so the
+	// opener prints the url and reports success. The login is then completed by
+	// hand, exactly as someone on an ssh session would.
 	_, err := Authorize(ctx, m.srv.URL+"/mcp", "", OAuth{},
 		NewFileStore(filepath.Join(t.TempDir(), "t.json")),
 		func(u string) error {
 			mu.Lock()
 			authURL = u
 			mu.Unlock()
-			// Pretend there is no desktop, then complete the login by hand.
 			go func() {
 				resp, err := http.Get(u)
 				if err == nil {
 					resp.Body.Close()
 				}
 			}()
-			return fmt.Errorf("no browser here")
+			return nil
 		})
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
@@ -946,6 +948,31 @@ func TestOpenFailureIsNotFatal(t *testing.T) {
 	defer mu.Unlock()
 	if !strings.Contains(authURL, "code_challenge=") {
 		t.Errorf("authorization url is missing its pkce challenge: %q", authURL)
+	}
+}
+
+// An opener that reports failure ends the flow instead of waiting three minutes
+// for a browser that never opened. The url comes back in the error so a caller
+// whose stderr nobody is reading — the terminal UI, once the alternate screen is
+// up — can put it somewhere it will be seen.
+func TestOpenFailureEndsTheFlow(t *testing.T) {
+	as := newFakeAS(t)
+	m := newFakeMCP(t, as)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err := Authorize(ctx, m.srv.URL+"/mcp", "", OAuth{},
+		NewFileStore(filepath.Join(t.TempDir(), "t.json")),
+		func(string) error { return fmt.Errorf("no browser here") })
+	if err == nil {
+		t.Fatal("a failed browser open was treated as success")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("waited %v after the browser failed to open; it should not wait at all", elapsed)
+	}
+	if !strings.Contains(err.Error(), "code_challenge=") {
+		t.Errorf("the error does not carry the authorization url to show the user: %v", err)
 	}
 }
 

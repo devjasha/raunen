@@ -61,6 +61,32 @@ function Mcp() {
         {"  "}<U>{'"mcp_enabled"'}</U>{': ["filesystem"]'}
       </Term>
 
+      <h2>Servers connect in the background</h2>
+      <p>
+        Connecting to a server is a round trip, and waiting for it before drawing
+        anything is what used to make raunen slow to start. So servers connect
+        alongside the terminal rather than in front of it: the prompt appears
+        immediately, and the tools arrive a moment later. The first turn waits for
+        them, which in practice has already happened by the time anything is typed.
+      </p>
+      <p>
+        A server is optional this way by default. Set <code>required</code> when a
+        turn is not worth starting without it — a workflow built around one
+        particular toolset — and accept that its handshake becomes part of how long
+        raunen takes to start.
+      </p>
+      <Term title="~/.config/raunen/mcp.json">
+        {"  "}<U>{'"filesystem"'}</U>{": {\n"}
+        {"    "}<U>{'"command"'}</U>{': "npx",\n'}
+        {"    "}<U>{'"args"'}</U>{': ["-y", "@modelcontextprotocol/server-filesystem", "."],\n'}
+        {"    "}<U>{'"required"'}</U>{": true\n"}
+        {"  }"}
+      </Term>
+      <p>
+        A server that does not start says why in <code>/mcp</code>, in the words the
+        endpoint used, rather than only on the way past.
+      </p>
+
       <h2>Large servers cost nothing until used</h2>
       <p>
         A tool is charged to the context of every request, whether or not it is ever

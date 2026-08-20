@@ -222,10 +222,16 @@ func Authorize(ctx context.Context, serverURL, challenge string, cfg OAuth, stor
 	}
 
 	if open == nil {
-		open = openBrowser
+		open = OpenBrowserOrPrint
 	}
+	// An opener that fails ends the flow rather than starting a wait. Whether a
+	// URL printed here can be read at all depends on where the caller is: a
+	// terminal that has handed itself over to the alternate screen shows
+	// nothing, and the three-minute wait that used to follow was for a browser
+	// that had not opened. So the decision belongs to the opener — see
+	// OpenBrowserOrPrint, which is what a caller with a visible stderr wants.
 	if err := open(authURL); err != nil {
-		fmt.Fprintf(os.Stderr, "raunen: could not open a browser — visit this url to authorize:\n%s\n", authURL)
+		return nil, fmt.Errorf("could not open a browser to authorize: %w; visit %s", err, authURL)
 	}
 
 	code, err := waitForCallback(ctx, ln, state)
@@ -978,8 +984,22 @@ func canonicalResource(raw string) string {
 	return u.String()
 }
 
-// openBrowser hands the URL to the desktop. Failure is not fatal: the caller
-// prints the URL instead, which is all a headless or remote session can do.
+// OpenBrowserOrPrint opens the URL, and falls back to printing it on stderr so
+// a headless or remote session can finish the login by hand. It is the default,
+// and the right choice for anything whose stderr a human is reading.
+//
+// It is deliberately not the right choice for the terminal UI: once the
+// alternate screen is up, a line printed here goes onto a screen that is thrown
+// away on exit, leaving a login nobody was told to perform. Such a caller passes
+// its own opener and handles the failure where it can be seen.
+func OpenBrowserOrPrint(u string) error {
+	if err := openBrowser(u); err != nil {
+		fmt.Fprintf(os.Stderr, "raunen: could not open a browser — visit this url to authorize:\n%s\n", u)
+	}
+	return nil
+}
+
+// openBrowser hands the URL to the desktop.
 func openBrowser(u string) error {
 	switch runtime.GOOS {
 	case "darwin":
