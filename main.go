@@ -247,6 +247,7 @@ func run() error {
 	m.SetMCPCounts(mcpServers.Counts)
 	m.SetMCPLazy(mcpServers.Lazy)
 	m.SetMCPFailures(mcpServers.Failures)
+	m.SetMCPAuth(mcpLogin(cfg), mcpLogout(cfg))
 	m.SetReady(ready)
 	m.SetProject(instr.Summary(root))
 	_, err = tea.NewProgram(m).Run()
@@ -408,6 +409,18 @@ func (s *mcpServers) attach(out *tools.Registry) {
 	}
 	out.Add(cat.SearchTool())
 	out.Add(cat.SelectTool())
+	// A model sometimes calls an MCP tool by name from memory before selecting
+	// it. The name is ours, so the honest reply is "load it first" rather than a
+	// bare "no such tool" that strands the turn — the same recovery fx gives a
+	// call to an advertised-but-unselected dynamic tool.
+	out.SetResolver(func(name string) (string, bool) {
+		if !cat.Advertised(name) {
+			return "", false
+		}
+		return fmt.Sprintf("%s is not loaded yet. Call mcp_select_tool with "+
+			"{\"name\": %q}, then call it on the next step after its schema is "+
+			"advertised.", name, name), true
+	})
 	s.mu.Lock()
 	s.catalog = cat
 	s.mu.Unlock()
@@ -489,33 +502,26 @@ func startMCP(cfg *config.Config, silent bool) *mcpServers {
 // splitInteractive separates the servers that must be connected before the
 // terminal draws from those that can finish in the background.
 //
-// Two reasons to be eager. "required" is the user saying a turn is not worth
-// starting without this server, which is the honest way to express it: raunen
-// cannot know that a workflow depends on one particular toolset.
+// Only "required" makes a server eager, which is the user saying a turn is not
+// worth starting without it. raunen does not try to work that out: a workflow
+// built around one particular toolset is not something it can see.
 //
-// The other is inferred, and narrower. A server that may open a browser prints
-// nothing useful once the alternate screen is up — the login instruction would
-// be written onto a screen that is discarded — so an OAuth server with no token
-// yet is connected while there is still a terminal to talk to. One that has been
-// authorized before refreshes silently and goes in the background with the rest.
+// An OAuth server used to be inferred as eager, on the grounds that its login
+// prints a url and then waits for a human, and a background connect has no
+// terminal to print it to. That was a guess standing in for a missing command.
+// Now that a login can be run deliberately with "/mcp auth", such a server
+// simply fails to connect and says why, which is both truer and quieter than
+// making everyone wait in case a browser is needed.
 func splitInteractive(defs map[string]config.MCP) (eager, deferred map[string]config.MCP) {
 	eager, deferred = map[string]config.MCP{}, map[string]config.MCP{}
-	store := mcp.DefaultTokenStore()
 	for name, def := range defs {
-		if def.Required || (def.OAuth != nil && !hasToken(store, def)) {
+		if def.Required {
 			eager[name] = def
 			continue
 		}
 		deferred[name] = def
 	}
 	return eager, deferred
-}
-
-// hasToken reports whether a token is already stored for this server, in which
-// case authorizing it will not stop to ask anything.
-func hasToken(store mcp.TokenStore, def config.MCP) bool {
-	t, err := store.Load(def.OAuth.Issuer, def.OAuth.Resource)
-	return err == nil && t != nil
 }
 
 // dial connects to every server at once and closes connected when they have all
@@ -894,4 +900,73 @@ func asConfigSkills(found *skills.Set) map[string]config.Skill {
 		}
 	}
 	return out
+}
+
+// mcpLogin runs the OAuth flow for one configured server, deliberately, from a
+// terminal that is waiting for it.
+//
+// It returns the authorization URL alongside any error so the caller can show it
+// rather than print it: this exists precisely because a background connect
+// cannot announce a login, and repeating that mistake here would defeat it.
+func mcpLogin(cfg *config.Config) func(context.Context, string) (string, error) {
+	return func(ctx context.Context, name string) (string, error) {
+		def, ok := cfg.MCP[name]
+		if !ok {
+			return "", fmt.Errorf("no MCP server called %s", name)
+		}
+		if def.OAuth == nil {
+			return "", fmt.Errorf("%s does not use oauth", name)
+		}
+		if def.URL == "" {
+			return "", fmt.Errorf("%s has no url to authorize against", name)
+		}
+
+		// Captured so a browser that will not open can still be answered by
+		// hand: the url goes back to the UI, which has somewhere to show it.
+		var authURL string
+		var mu sync.Mutex
+		open := func(u string) error {
+			mu.Lock()
+			authURL = u
+			mu.Unlock()
+			return mcp.OpenBrowser(u)
+		}
+
+		_, err := mcp.Authorize(ctx, def.URL, "", mcp.OAuth{
+			Issuer:   def.OAuth.Issuer,
+			ClientID: def.OAuth.ClientID,
+			Scopes:   def.OAuth.Scopes,
+			Resource: def.OAuth.Resource,
+		}, mcp.DefaultTokenStore(), open)
+
+		mu.Lock()
+		u := authURL
+		mu.Unlock()
+		if err != nil {
+			return u, err
+		}
+		return "", nil
+	}
+}
+
+// mcpLogout drops a server's stored token, so the next run authorizes afresh.
+func mcpLogout(cfg *config.Config) func(string) error {
+	return func(name string) error {
+		def, ok := cfg.MCP[name]
+		if !ok {
+			return fmt.Errorf("no MCP server called %s", name)
+		}
+		if def.OAuth == nil {
+			return fmt.Errorf("%s does not use oauth", name)
+		}
+		store, ok := mcp.DefaultTokenStore().(mcp.TokenForgetter)
+		if !ok {
+			return fmt.Errorf("this token store cannot forget a token")
+		}
+		resource := def.OAuth.Resource
+		if resource == "" {
+			resource = def.URL
+		}
+		return store.Forget(def.OAuth.Issuer, resource)
+	}
 }

@@ -150,41 +150,47 @@ func TestFailureReasonIsKept(t *testing.T) {
 	}
 }
 
-// A server that may open a browser has to connect before the terminal draws:
-// its flow prints an authorization URL and then waits for a human, and once the
-// alternate screen is open that instruction is written where it cannot be read.
-// Everything else connects in the background.
-func TestOnlyUnauthorizedOAuthServersAreEager(t *testing.T) {
+// An OAuth server is deferred like any other now that "/mcp auth" exists to run
+// its login deliberately. Connecting it eagerly was a guess standing in for that
+// command: it made everyone wait in case a browser might be needed.
+func TestOAuthServerIsDeferredLikeAnyOther(t *testing.T) {
 	defs := map[string]config.MCP{
-		"plain": mockDef(),
-		"needs": {Type: "http", URL: "https://example.invalid/mcp", OAuth: &config.MCPOAuth{Issuer: "https://issuer.invalid"}},
+		"protected": {Type: "http", URL: "https://example.invalid/mcp",
+			OAuth: &config.MCPOAuth{Issuer: "https://issuer.invalid"}},
 	}
 	eager, deferred := splitInteractive(defs)
 
-	if _, ok := eager["needs"]; !ok {
-		t.Error("an OAuth server with no stored token must connect before the first frame")
+	if len(eager) != 0 {
+		t.Errorf("an oauth server was made eager: %v", eager)
 	}
-	if _, ok := deferred["plain"]; !ok {
-		t.Error("a server that cannot prompt should not hold up the first frame")
-	}
-	if _, ok := eager["plain"]; ok {
-		t.Error("a plain server was made eager, which is the wait we removed")
+	if _, ok := deferred["protected"]; !ok {
+		t.Error("an oauth server should connect in the background like the rest")
 	}
 }
 
-// An OAuth server that has been authorized before refreshes without asking
-// anything, so it belongs in the background like any other.
-func TestAuthorizedOAuthServerIsDeferred(t *testing.T) {
-	dir := t.TempDir()
-	store := mcp.NewFileStore(filepath.Join(dir, "tokens.json"))
-	if err := store.Save("https://issuer.invalid", "", &mcp.Token{AccessToken: "cached"}); err != nil {
+// Forget drops a stored token so the next run authorizes afresh, which is what
+// /mcp logout is for.
+func TestForgetDropsTheToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	store := mcp.NewFileStore(path).(mcp.TokenForgetter)
+	const issuer, resource = "https://issuer.invalid", "https://example.invalid/mcp"
+
+	if err := store.Save(issuer, resource, &mcp.Token{AccessToken: "cached"}); err != nil {
 		t.Fatal(err)
 	}
-	def := config.MCP{Type: "http", URL: "https://example.invalid/mcp",
-		OAuth: &config.MCPOAuth{Issuer: "https://issuer.invalid"}}
-
-	if !hasToken(store, def) {
-		t.Fatal("a saved token was not found, so every run would wait for a browser")
+	if err := store.Forget(issuer, resource); err != nil {
+		t.Fatalf("forget: %v", err)
+	}
+	tok, err := store.Load(issuer, resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok != nil {
+		t.Error("the token survived a logout")
+	}
+	// Forgetting what is already gone is what the caller asked for, not an error.
+	if err := store.Forget(issuer, resource); err != nil {
+		t.Errorf("forgetting an absent token errored: %v", err)
 	}
 }
 

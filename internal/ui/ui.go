@@ -296,6 +296,10 @@ type Model struct {
 	// A function for the same reason mcp is one: the servers connect after the
 	// first frame is drawn, so this is not known until they have answered.
 	mcpLazy func() bool
+	// mcpLogin authorizes a server by name, and mcpLogout drops its credentials.
+	// Both nil outside the terminal, where there is nobody to answer a browser.
+	mcpLogin  func(ctx context.Context, name string) (string, error)
+	mcpLogout func(name string) error
 	// mcpFails reports why each server did not start. A function like mcp, and
 	// for a sharper reason: the servers connect after the terminal has drawn, so
 	// a failure reported on stderr from then on would be written into the
@@ -352,6 +356,18 @@ func (m *Model) SetMCPLazy(f func() bool) { m.mcpLazy = f }
 
 // SetMCPFailures installs a source for why servers did not start, shown in /mcp.
 func (m *Model) SetMCPFailures(f func() map[string]string) { m.mcpFails = f }
+
+// SetMCPAuth installs how /mcp auth logs in to a server and /mcp logout clears
+// it. Injected like the rest of the MCP surface so this package keeps no
+// knowledge of the protocol: it asks for a server by name and is told what
+// happened, in words it prints unaltered.
+//
+// authURL, when the login needs a browser that could not be opened, is the
+// address to visit. It is returned rather than printed because stderr is not
+// visible from here — that is the whole reason this command exists.
+func (m *Model) SetMCPAuth(login func(ctx context.Context, name string) (authURL string, err error), logout func(name string) error) {
+	m.mcpLogin, m.mcpLogout = login, logout
+}
 
 // readyMsg says the deferred startup work has finished and carries the message
 // that arrived before it did, so the turn can be started for real.
@@ -1094,6 +1110,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The tools have landed; the message that was waiting on them can go.
 		m.ready = nil
 		return m.send(msg.text)
+
+	case mcpAuthMsg:
+		m.showMCPAuthResult(msg)
+		return m, nil
 
 	case statusMsg:
 		m.showProviders(msg.providers)
@@ -2555,6 +2575,17 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		return *m, nil
 
 	case "/mcp":
+		// Subcommands first, so a server can still be called "auth" without the
+		// listing becoming unreachable — "/mcp auth" with no name is the verb,
+		// "/mcp auth <name>" acts on a server.
+		if len(fields) > 2 {
+			switch fields[1] {
+			case "auth", "login":
+				return m.mcpAuth(fields[2])
+			case "logout":
+				return m.mcpLogoutServer(fields[2])
+			}
+		}
 		if len(fields) > 1 {
 			return *m, m.showMCPServer(fields[1])
 		}

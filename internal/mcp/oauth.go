@@ -99,6 +99,17 @@ type TokenStore interface {
 	Save(issuer, resource string, t *Token) error
 }
 
+// TokenForgetter is a TokenStore that can also drop a token, which is what
+// logging out of a server means. Optional rather than part of TokenStore: a
+// store that only ever reads what someone else wrote is still a valid store,
+// and widening the interface would break it for the sake of one caller.
+type TokenForgetter interface {
+	TokenStore
+	// Forget removes the token for this resource. Removing one that is not
+	// there is not an error: the caller wanted it gone and it is gone.
+	Forget(issuer, resource string) error
+}
+
 // ClientStore is the optional other half of a TokenStore: somewhere to remember
 // the client_id handed out by dynamic registration. Registering on every run
 // would litter the authorization server with dead clients and, on some servers,
@@ -993,14 +1004,17 @@ func canonicalResource(raw string) string {
 // away on exit, leaving a login nobody was told to perform. Such a caller passes
 // its own opener and handles the failure where it can be seen.
 func OpenBrowserOrPrint(u string) error {
-	if err := openBrowser(u); err != nil {
+	if err := OpenBrowser(u); err != nil {
 		fmt.Fprintf(os.Stderr, "raunen: could not open a browser — visit this url to authorize:\n%s\n", u)
 	}
 	return nil
 }
 
-// openBrowser hands the URL to the desktop.
-func openBrowser(u string) error {
+// OpenBrowser hands the URL to the desktop and reports whether it went. A caller
+// that has its own way to show the URL — the terminal UI, which can put it in
+// the transcript — wants this rather than OpenBrowserOrPrint, whose fallback is
+// a stderr line it would never see.
+func OpenBrowser(u string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.Command("open", u).Start()
@@ -1109,6 +1123,27 @@ func (f *fileStore) Save(issuer, resource string, t *Token) error {
 	cp.Issuer = issuer
 	cp.Resource = resource
 	sf.Tokens[resource] = &cp
+	return f.write(sf)
+}
+
+// Forget drops the token for a resource, so the next request authorizes afresh.
+// The client registration is deliberately kept: it identifies raunen to the
+// authorization server rather than the user to raunen, and re-registering on
+// every logout is what the client store exists to avoid.
+func (f *fileStore) Forget(issuer, resource string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sf := f.read()
+	t := sf.Tokens[resource]
+	if t == nil {
+		return nil
+	}
+	// Same issuer check as Load, so logging out of one server cannot drop the
+	// token another issuer holds for the same resource string.
+	if issuer != "" && t.Issuer != "" && t.Issuer != issuer {
+		return nil
+	}
+	delete(sf.Tokens, resource)
 	return f.write(sf)
 }
 
