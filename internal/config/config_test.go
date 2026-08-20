@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -364,5 +365,68 @@ func TestSkillNamesAreSorted(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("SkillNames()[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// A server defined in mcp.json has to reach the running config: the file is
+// loaded by its own function, and for a while nothing called it, so a
+// perfectly good mcp.json produced no servers at all and /mcp reported none.
+func TestLoadReadsMCPFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if err := os.MkdirAll(filepath.Join(dir, "raunen"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(MCPPath(), []byte(`{
+	  "github": { "type": "http", "url": "https://api.example.com/mcp/" }
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := c.MCP["github"]
+	if !ok {
+		t.Fatalf("mcp.json did not reach the config, got %v", c.MCP)
+	}
+	if def.URL != "https://api.example.com/mcp/" {
+		t.Errorf("url = %q, want the one from the file", def.URL)
+	}
+	// And it must survive the enabled-set filter, which is what actually
+	// decides whether the server is started.
+	if _, ok := c.ActiveMCP()["github"]; !ok {
+		t.Error("the server from mcp.json is not active")
+	}
+}
+
+// A definition written inline in config.json keeps working and wins over the
+// file, so merging the two does not change an existing setup.
+func TestInlineMCPWinsOverFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if err := os.MkdirAll(filepath.Join(dir, "raunen"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(MCPPath(), []byte(`{
+	  "github": { "type": "http", "url": "https://from-file.example.com/" }
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte(`{
+	  "mcp": { "github": { "type": "http", "url": "https://from-config.example.com/" } }
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Load(Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.MCP["github"].URL; got != "https://from-config.example.com/" {
+		t.Errorf("url = %q, want the inline definition to win", got)
 	}
 }
