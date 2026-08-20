@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -26,10 +27,22 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "raunen:", err)
-		os.Exit(1)
+	err := run()
+	if err == nil {
+		return
 	}
+	// A run that carried its own status says what it should be — 130 for a turn
+	// stopped by ctrl+c, which is what lets a script tell an interruption from a
+	// model that failed. Everything else is an ordinary failure.
+	var ex exitError
+	if errors.As(err, &ex) {
+		if !ex.quiet {
+			fmt.Fprintln(os.Stderr, "raunen:", err)
+		}
+		os.Exit(ex.code)
+	}
+	fmt.Fprintln(os.Stderr, "raunen:", err)
+	os.Exit(1)
 }
 
 func run() error {
@@ -42,6 +55,8 @@ func run() error {
 		listSess   = flag.Bool("sessions", false, "list saved sessions and exit")
 		listRun    = flag.Bool("running", false, "list running raunen instances and exit")
 		showVer    = flag.Bool("version", false, "print the version and exit")
+		asJSON     = flag.Bool("json", false, "with a prompt, print one JSON result instead of prose")
+		noSave     = flag.Bool("no-save", false, "with a prompt, do not save the session")
 	)
 	flag.Parse()
 
@@ -159,7 +174,7 @@ func run() error {
 		// the scripted case too — that is where the same instructions are most
 		// often repeated.
 		prompt, _ := cfg.ExpandSkills(strings.Join(args, " "))
-		return oneShot(ag, prompt)
+		return oneShot(ag, sess, prompt, oneShotOpts{json: *asJSON, save: !*noSave})
 	}
 
 	// Announce this instance so a picker can find it; tmux cannot, since it
@@ -635,44 +650,4 @@ func dim(s string) string {
 		return s
 	}
 	return "\x1b[90m" + s + "\x1b[0m"
-}
-
-// oneShot runs a single turn and streams plain text to stdout, with tool
-// activity on stderr so stdout stays pipeable.
-func oneShot(ag *agent.Agent, prompt string) error {
-	events := make(chan agent.Event, 64)
-	go ag.Run(context.Background(), prompt, events)
-
-	for ev := range events {
-		switch e := ev.(type) {
-		case agent.TextDelta:
-			fmt.Print(e.Text)
-		case agent.ReasoningDelta:
-			// Thinking goes to stderr so stdout stays clean for pipes.
-			fmt.Fprint(os.Stderr, dim(e.Text))
-		case agent.Usage:
-			// Token accounting is the first thing worth seeing when replies go
-			// wrong, so it is available on stderr behind RAUNEN_DEBUG.
-			if debug {
-				fmt.Fprintf(os.Stderr, dim("\n[usage] prompt=%d completion=%d total=%d\n"),
-					e.Prompt, e.Completion, e.Total)
-			}
-		case agent.Switched:
-			fmt.Fprintf(os.Stderr, dim("[switched to %s — %s]\n"), e.To, e.Reason)
-		case agent.Trimmed:
-			fmt.Fprintf(os.Stderr, dim("[dropped %d earlier messages to fit the context]\n"), e.Messages)
-		case agent.ToolStart:
-			fmt.Fprintf(os.Stderr, "⏺ %s\n", e.Name)
-		case agent.ToolEnd:
-			if e.Err != nil {
-				fmt.Fprintf(os.Stderr, "  ↳ %v\n", e.Err)
-			}
-		case agent.TurnEnd:
-			fmt.Println()
-		case agent.Failed:
-			fmt.Println()
-			return e.Err
-		}
-	}
-	return nil
 }
