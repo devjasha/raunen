@@ -17,6 +17,7 @@ import (
 	"raunen/internal/agent"
 	"raunen/internal/companion"
 	"raunen/internal/config"
+	"raunen/internal/instructions"
 	"raunen/internal/mcp"
 	"raunen/internal/provider"
 	"raunen/internal/session"
@@ -127,6 +128,11 @@ func run() error {
 	reg = mcpServers.AddTo(reg)
 
 	ag := agent.New(provider.New(p.BaseURL, p.Key(), model), reg, cfg.System)
+	// What the project says about itself, from AGENTS.md here and in the
+	// directories above. Read after the agent exists so the block can be
+	// replaced later without rebuilding it.
+	instr := instructions.Load(root, config.InstructionsPath())
+	ag.SetProject(instr.Prompt(root))
 	ag.SetContext(window)
 	ag.SetRef(ref)
 	ag.SetAutoSwitch(cfg.AutoSwitch)
@@ -171,6 +177,7 @@ func run() error {
 	// mid-session shows up in /mcp and /status without a restart.
 	m.SetMCPCounts(mcpServers.Counts)
 	m.SetMCPLazy(mcpServers.catalog != nil)
+	m.SetProject(instr.Summary(root))
 	_, err = tea.NewProgram(m).Run()
 	return err
 }

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"raunen/internal/config"
+	"raunen/internal/instructions"
 	"raunen/internal/provider"
 )
 
@@ -114,6 +115,16 @@ func (m *Model) status() {
 	}
 	row("session", sess)
 	row("cwd", dimStyle.Render(shortRoot(m.root)))
+
+	// Which AGENTS.md files are speaking for this directory. Named rather than
+	// counted: "2 files" does not tell you whether the one you just wrote is
+	// among them, which is the only question anyone asks here.
+	if m.project != "" {
+		row("project", dimStyle.Render(m.project))
+	} else {
+		row("project", dimStyle.Render("no "+instructions.Name+
+			" — add one to give the agent standing instructions"))
+	}
 
 	// The ladder is what happens when this model runs out of room, so it is
 	// worth seeing before it does rather than after.

@@ -641,6 +641,73 @@ MCP servers do — from the other direction. A config is personal, holds API key
 and is a handful of settings about which model runs; a set of skills is prose,
 sometimes a page of it, and is the part worth handing to someone else.
 
+## Project instructions
+
+A project has conventions that are not visible in any one file: which command
+runs the tests, which directories are generated, the fact that one package is
+load-bearing. A model has no way to find those in the time it has to look, so it
+guesses, and it guesses the same thing wrong every session.
+
+Put them in `AGENTS.md` at the top of the repository:
+
+```markdown
+# raunen
+
+Go 1.25, no runtime dependencies. `go test ./...` before proposing a change.
+
+- `internal/agent` is the tool-use loop; it must stay presentation-free
+- Comments explain why, not what
+```
+
+It is read at startup and added to the system prompt, so it costs context on
+every turn — which is the argument for keeping it short. A page is fine. A
+manual belongs in the repository as a document the agent can read when it needs
+to, not in the prompt where it is paid for whether or not it comes up.
+
+`AGENTS.md` rather than a name of our own, because it is the file [other
+agents](https://agents.md) already read. A repository that has one works here
+without being adapted to raunen specifically, and one written for raunen is not
+wasted on whatever gets used next.
+
+**Nested files apply to what is under them.** A monorepo does not have one set
+of conventions, so every `AGENTS.md` from the top of the tree down to the
+working directory is read, outermost first:
+
+```
+project/
+├── AGENTS.md          ← always
+└── apps/web/
+    └── AGENTS.md      ← only when working in apps/web
+```
+
+The nearest file is read last, which is what makes it win: a rule in a
+sub-package is there precisely to override the one at the top. `~/.config/raunen/AGENTS.md`
+comes before both and applies everywhere — the place for how *you* work rather
+than how one repository does.
+
+The walk stops at your home directory. Everything above a project is shared by
+every project, and a stray `AGENTS.md` in `~` or `/tmp` attaching itself to
+unrelated work would be a strange way to be helpful; the global file is the
+deliberate way to say something once.
+
+**A direct request outranks the file.** The instructions are framed as standing
+conventions rather than as rules, because they are not what you asked for right
+now. Without that, `always run the full suite` turns a question about one
+function into a ten-minute build.
+
+`/status` names what was loaded, since instructions that quietly did not arrive
+look exactly like a model ignoring them:
+
+```
+  project   AGENTS.md, apps/web/AGENTS.md
+```
+
+Files are capped at 32 KB each and 64 KB in total, and what is cut is reported
+rather than dropped silently. Sub-agents inherit the same instructions: they
+edit the same working directory, and they cannot see the conversation, so a
+convention about how the project is built is the one thing they have no other
+way to learn.
+
 ## The companion
 
 The dragon is not decoration: it grows on the one thing every provider charges
@@ -784,6 +851,11 @@ definitions can carry a token in their env, and `skills.json` for saved prompts,
 which are prose and would bury the settings above. Both are written empty on
 first run, and a broken one is reported and skipped rather than taken as a
 reason not to start.
+
+A third, `AGENTS.md`, is not created for you: an empty `config.json` documents
+the settings that exist, but an empty `AGENTS.md` documents nothing, and a file
+sitting there waiting to be filled in invites being filled in with what belongs
+in a project instead. See [project instructions](#project-instructions).
 
 ### Context windows
 

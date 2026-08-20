@@ -293,6 +293,10 @@ type Model struct {
 	// mcpLazy reports that the MCP tools are held in a catalogue rather than
 	// advertised, so /mcp can explain why the model does not see them directly.
 	mcpLazy bool
+	// project names the AGENTS.md files in force, for /status. Empty when the
+	// project has none, which is the common case and shows as a hint rather
+	// than as a missing row.
+	project string
 	// lastInput is what the input held when the list was last rebuilt, which is
 	// how a dismissal can tell "still the same word" from "typing again".
 	lastInput string
@@ -334,6 +338,11 @@ func (m *Model) SetMCPCounts(f func() map[string]int) { m.mcp = f }
 // SetMCPLazy records that the MCP tools are reached through search and select
 // rather than advertised on every request, so /mcp can say so.
 func (m *Model) SetMCPLazy(lazy bool) { m.mcpLazy = lazy }
+
+// SetProject records which instruction files were loaded, as a summary line for
+// /status. Instructions that quietly did not arrive look exactly like a model
+// ignoring them, so which files are in force has to be visible.
+func (m *Model) SetProject(summary string) { m.project = summary }
 
 func New(cfg *config.Config, ag *agent.Agent, root, ref string, sess *session.Session, comp *companion.Companion) Model {
 	ti := textarea.New()

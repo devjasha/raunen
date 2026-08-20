@@ -506,6 +506,27 @@ func writeMCP(path string, m map[string]MCP) error {
 	return os.Rename(tmp, path)
 }
 
+// InstructionsPath is the global AGENTS.md, read for every project before the
+// ones in the working directory. It is the place for things that are true of
+// how you work rather than of one repository — a preference for a test runner,
+// a house style — which would otherwise have to be repeated in every project's
+// file or squeezed into the "system" key.
+//
+// It is not created on first run, unlike the other files here. An empty
+// config.json documents the settings that exist, but an empty AGENTS.md
+// documents nothing, and a file that exists but says nothing invites being
+// filled in with what belongs in a project instead.
+func InstructionsPath() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "raunen", "AGENTS.md")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "raunen", "AGENTS.md")
+}
+
 // Path is the default config location. It follows XDG rather than
 // os.UserConfigDir, which on macOS points at ~/Library/Application Support —
 // not where terminal tools are usually configured.
