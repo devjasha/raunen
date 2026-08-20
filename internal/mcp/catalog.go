@@ -121,9 +121,19 @@ func match(t tools.Tool, terms []string) bool {
 // summary is one line of a search result: enough to choose by, and no schema.
 // The schema is the expensive part and is what select is for.
 func summary(t tools.Tool) string {
-	desc := strings.TrimSpace(t.Description)
-	// Descriptions from a server can run to paragraphs. One line is enough to
-	// decide whether a tool is worth loading, and the rest arrives on select.
+	desc := shortDesc(t.Description)
+	if desc == "" {
+		return t.Name
+	}
+	return t.Name + " — " + desc
+}
+
+// shortDesc cuts a description down to the first sentence or line, capped.
+// Descriptions from a server can run to paragraphs, and a listing that repeats
+// them in full costs more context than the thing being listed. Resource and
+// prompt listings reuse it for the same reason.
+func shortDesc(desc string) string {
+	desc = strings.TrimSpace(desc)
 	if i := strings.IndexAny(desc, ".\n"); i > 0 {
 		desc = desc[:i]
 	}
@@ -131,10 +141,7 @@ func summary(t tools.Tool) string {
 	if len(desc) > maxDesc {
 		desc = strings.TrimSpace(desc[:maxDesc]) + "…"
 	}
-	if desc == "" {
-		return t.Name
-	}
-	return t.Name + " — " + desc
+	return desc
 }
 
 // maxResults caps a search listing. A model that asks for "file" against a

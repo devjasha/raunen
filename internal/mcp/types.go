@@ -1,9 +1,9 @@
 package mcp
 
 // ServerCapabilities is the subset of the server's advertised capabilities that
-// raunen cares about. It is decoded from the initialize result; the rest of the
-// capability object (prompts, resources, logging, ...) is ignored because raunen
-// only drives tools.
+// raunen cares about. It is decoded from the initialize result; what is left out
+// (logging, completions, experimental, ...) is ignored because raunen drives
+// only tools, resources and prompts.
 type ServerCapabilities struct {
 	// Tools reports whether the server offers tools. ListChanged, when set,
 	// means the server will send tools/list_changed notifications so raunen can
@@ -12,6 +12,35 @@ type ServerCapabilities struct {
 	Tools struct {
 		ListChanged bool `json:"listChanged"`
 	} `json:"tools"`
+	// Resources is non-nil only when the server advertises the capability at
+	// all. It is a pointer for exactly that reason: a server that offers no
+	// resources and one that offers resources without listChanged decode to the
+	// same zero struct otherwise, and raunen would advertise resource tools that
+	// can only ever answer "method not found".
+	Resources *ResourcesCapability `json:"resources,omitempty"`
+	// Prompts is non-nil only when the server advertises prompts, for the same
+	// reason as Resources.
+	Prompts *PromptsCapability `json:"prompts,omitempty"`
+}
+
+// ResourcesCapability is what a server says about its resources.
+type ResourcesCapability struct {
+	// Subscribe means the server accepts resources/subscribe for per-resource
+	// change notifications. raunen does not subscribe — a cached listing that is
+	// dropped on list_changed is enough — but the flag is decoded so follow-up
+	// work does not have to widen the type.
+	Subscribe bool `json:"subscribe"`
+	// ListChanged means the server sends notifications/resources/list_changed
+	// when the set of resources changes, which is what lets raunen cache a
+	// listing at all instead of re-listing on every call.
+	ListChanged bool `json:"listChanged"`
+}
+
+// PromptsCapability is what a server says about its prompts.
+type PromptsCapability struct {
+	// ListChanged means the server sends notifications/prompts/list_changed when
+	// its prompt set changes.
+	ListChanged bool `json:"listChanged"`
 }
 
 // InitializeResult is the body of the initialize response. raunen records the
