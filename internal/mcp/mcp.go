@@ -122,6 +122,13 @@ type Client struct {
 
 	tools []tools.Tool
 
+	// listings caches resource and prompt lists until the server says they
+	// changed. A list is re-read (a round trip per page) on every model call
+	// that asks for it, so without the cache a large server costs a request per
+	// page each time. Guarded by mu because list_changed refreshes it from the
+	// transport's read goroutine.
+	listings *listings
+
 	// serverProtocolVersion is the version the server agreed to speak, from the
 	// initialize result. Decoded so later code can adapt to what the server
 	// actually supports rather than assume our request won.
@@ -163,7 +170,7 @@ func Start(ctx context.Context, name string, s Server) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{name: name, t: t, s: s}
+	c := &Client{name: name, t: t, s: s, listings: &listings{}}
 	if err := c.initialize(ctx); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("mcp %q: %w", name, err)
@@ -181,27 +188,63 @@ func Start(ctx context.Context, name string, s Server) (*Client, error) {
 	// inline deadlocks until the context expires. The Start context is not reused
 	// either — it covers startup and is usually cancelled by the time a server
 	// changes its mind — so the re-list gets a fresh timeout of its own.
-	if c.caps.Tools.ListChanged {
+	// A server that advertises ListChanged may revise its toolset, its resources,
+	// or its prompts while we are running. The notifications arrive on the
+	// transport's read loop, and re-listing the same kind of thing can only be
+	// answered by that loop — so handling them inline would deadlock; a fresh
+	// goroutine with its own timeout is used instead. The Start context is not
+	// reused: it covers startup and is usually cancelled by the time a server
+	// changes its mind. The cached resource and prompt listings are dropped on
+	// their notifications, since a cached list is only safe until the server says
+	// it changed.
+	if c.caps.Tools.ListChanged || (c.caps.Resources != nil && c.caps.Resources.ListChanged) ||
+		(c.caps.Prompts != nil && c.caps.Prompts.ListChanged) {
 		c.t.OnNotification(func(method string, params json.RawMessage) {
-			if method != "notifications/tools/list_changed" {
-				return
+			switch method {
+			case "notifications/tools/list_changed":
+				go c.refreshTools()
+			case "notifications/resources/list_changed":
+				go c.dropResources()
+			case "notifications/prompts/list_changed":
+				go func() {
+					c.mu.Lock()
+					l := c.listings
+					c.mu.Unlock()
+					if l != nil {
+						l.setPrompts(nil)
+					}
+				}()
 			}
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				if err := c.listTools(ctx); err != nil {
-					return
-				}
-				c.mu.Lock()
-				cb := c.onToolsChanged
-				c.mu.Unlock()
-				if cb != nil {
-					cb(c.name, c.Tools())
-				}
-			}()
 		})
 	}
 	return c, nil
+}
+
+// refreshTools re-lists the toolset after a tools/list_changed notification and
+// hands the result to the registered callback, if any.
+func (c *Client) refreshTools() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := c.listTools(ctx); err != nil {
+		return
+	}
+	c.mu.Lock()
+	cb := c.onToolsChanged
+	c.mu.Unlock()
+	if cb != nil {
+		cb(c.name, c.Tools())
+	}
+}
+
+// dropResources forgets the cached resource listing, which is all a listing is
+// good for until the server says it changed. Prompts have their own field.
+func (c *Client) dropResources() {
+	c.mu.Lock()
+	l := c.listings
+	c.mu.Unlock()
+	if l != nil {
+		l.setResources(nil)
+	}
 }
 
 // Tools returns the tools this server advertised, ready to register. The slice

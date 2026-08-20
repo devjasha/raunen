@@ -240,6 +240,19 @@ func (s *mcpServers) AddTo(reg *tools.Registry) *tools.Registry {
 			t.Name = tname
 			all = append(all, named{server: name, tool: t})
 		}
+		// A server's resource and prompt tools come along with its tools,
+		// gated on the capability each advertises. They are skipped entirely
+		// when the server does not offer the feature, so a tool that can only
+		// ever answer "method not found" is never shown.
+		for _, t := range c.ResourcePromptTools() {
+			tname := t.Name
+			for out.Has(tname) || taken[tname] {
+				tname = name + "_" + t.Name
+			}
+			taken[tname] = true
+			t.Name = tname
+			all = append(all, named{server: name, tool: t})
+		}
 		s.mu.Lock()
 		s.counts[name] = 0
 		s.mu.Unlock()

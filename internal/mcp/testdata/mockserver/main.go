@@ -1,8 +1,12 @@
 // Command mockserver is a minimal MCP server used by the mcp package's tests.
-// It implements just enough of the protocol to exercise initialize, tools/list
-// and tools/call: it advertises one tool, "ping", and echoes its argument.
+// It implements just enough of the protocol to exercise initialize, tools/list,
+// tools/call, resources/list (paginated), resources/read (text + blob),
+// resources/templates/list, prompts/list and prompts/get.
 //
-// It is never installed; the test runs it with `go run`.
+// Resources and prompts are only advertised when MCP_FEATURES=1 is set, so the
+// tests that assert tools are absent without the capability can run the same
+// binary with the variable unset. It is never installed; the test runs it with
+// `go run`.
 package main
 
 import (
@@ -18,9 +22,28 @@ func main() {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 
+	features := os.Getenv("MCP_FEATURES") == "1"
+
 	// grown records that an "announce" call has extended the toolset, so a later
 	// tools/list reports the extra tool.
 	grown := false
+
+	// Known resources, in two pages so pagination is genuinely exercised. The
+	// second resource is a blob: base64 of a small image, which the client must
+	// not return verbatim.
+	blob := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	page1 := []map[string]any{{
+		"uri":         "file:///notes.txt",
+		"name":        "Notes",
+		"description": "Plain-text notes",
+		"mimeType":    "text/plain",
+	}}
+	page2 := []map[string]any{{
+		"uri":         "file:///diagram.png",
+		"name":        "Diagram",
+		"description": "A small binary image",
+		"mimeType":    "image/png",
+	}}
 
 	for in.Scan() {
 		line := in.Text()
@@ -32,6 +55,8 @@ func main() {
 			Method string `json:"method"`
 			Params struct {
 				Name      string          `json:"name"`
+				URI       string          `json:"uri"`
+				Cursor    string          `json:"cursor"`
 				Arguments json.RawMessage `json:"arguments"`
 			} `json:"params"`
 		}
@@ -40,12 +65,15 @@ func main() {
 		}
 		switch req.Method {
 		case "initialize":
+			caps := map[string]any{"tools": map[string]any{"listChanged": true}}
+			if features {
+				caps["resources"] = map[string]any{"listChanged": true}
+				caps["prompts"] = map[string]any{"listChanged": true}
+			}
 			write(out, req.ID, map[string]any{
 				"protocolVersion": "2024-11-05",
-				// Declaring listChanged is what makes the client subscribe to
-				// tools/list_changed, which the "announce" tool below triggers.
-				"capabilities": map[string]any{"tools": map[string]any{"listChanged": true}},
-				"serverInfo":   map[string]any{"name": "mockserver"},
+				"capabilities":    caps,
+				"serverInfo":      map[string]any{"name": "mockserver"},
 			})
 		case "ping":
 			write(out, req.ID, map[string]any{})
@@ -107,6 +135,81 @@ func main() {
 			}
 			write(out, req.ID, map[string]any{
 				"content": []map[string]any{{"type": "text", "text": "pong: " + args.Msg}},
+			})
+		case "resources/list":
+			// Two pages: the first carries a cursor, the second closes it.
+			if req.Params.Cursor == "page2" {
+				write(out, req.ID, map[string]any{"resources": page2})
+			} else {
+				write(out, req.ID, map[string]any{
+					"resources":  page1,
+					"nextCursor": "page2",
+				})
+			}
+		case "resources/templates/list":
+			write(out, req.ID, map[string]any{
+				"resourceTemplates": []map[string]any{{
+					"uriTemplate": "file:///{path}",
+					"name":        "File by path",
+					"description": "Read any file under the root",
+					"mimeType":    "text/plain",
+				}},
+			})
+		case "resources/read":
+			switch req.Params.URI {
+			case "file:///notes.txt":
+				write(out, req.ID, map[string]any{
+					"contents": []map[string]any{{
+						"uri":      "file:///notes.txt",
+						"mimeType": "text/plain",
+						"text":     "the secret is 42",
+					}},
+				})
+			case "file:///diagram.png":
+				write(out, req.ID, map[string]any{
+					"contents": []map[string]any{{
+						"uri":      "file:///diagram.png",
+						"mimeType": "image/png",
+						"blob":     blob,
+					}},
+				})
+			default:
+				write(out, req.ID, map[string]any{
+					"contents": []map[string]any{},
+				})
+			}
+		case "prompts/list":
+			write(out, req.ID, map[string]any{
+				"prompts": []map[string]any{{
+					"name":        "summarize",
+					"description": "Summarize a body of text",
+					"arguments": []map[string]any{
+						{"name": "text", "description": "the text to summarize", "required": true},
+					},
+				}},
+			})
+		case "prompts/get":
+			// The arguments object's keys are the prompt's own argument names
+			// (e.g. "text"), not an "arguments" wrapper, so decode straight into
+			// a string map.
+			argValues := map[string]string{}
+			if err := json.Unmarshal(req.Params.Arguments, &argValues); err != nil {
+				write(out, req.ID, map[string]any{"error": map[string]any{"code": -32602, "message": "bad arguments"}})
+				continue
+			}
+			text := ""
+			if argValues != nil {
+				text = argValues["text"]
+			}
+			write(out, req.ID, map[string]any{
+				"description": "Summarize the text",
+				"messages": []map[string]any{{
+					"role": "user",
+					"content": map[string]any{
+						"type": "text",
+						"text": fmt.Sprintf("Summarize this: %s", text),
+					},
+				}},
 			})
 		}
 	}
