@@ -116,6 +116,73 @@ func TestNoticeStaysTight(t *testing.T) {
 	}
 }
 
+// TestListItemsStayTight checks that the blank line models habitually put
+// between list items is dropped. A ten-item list rendered at double spacing is
+// twenty rows for ten rows of content, and the source it came from does not
+// look like that.
+func TestListItemsStayTight(t *testing.T) {
+	m := testModel(t)
+	tn := begin(&m)
+	m.openTurn(tn, "list them", "")
+	m.onEvent(tn, agent.TextDelta{Text: "Items:\n\n- one\n\n- two\n\n- three\n\nDone.\n"})
+
+	got := rowsOf(m)[1:] // drop the rule, which carries the clock
+	want := []string{
+		"▌ list them",
+		"",
+		"Items:",
+		"",
+		"• one",
+		"• two",
+		"• three",
+		"",
+		"Done.",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d rows, want %d:\n%q", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d: got %q, want %q\nall:\n%q", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestBlankRunsCollapse checks that a model ending a paragraph with several
+// newlines still gets one paragraph break. Some models emit two or three, and
+// each one used to become a row of nothing.
+func TestBlankRunsCollapse(t *testing.T) {
+	m := testModel(t)
+	tn := begin(&m)
+	m.openTurn(tn, "q", "")
+	m.onEvent(tn, agent.TextDelta{Text: "one\n\n\n\ntwo\n"})
+
+	rows := rowsOf(m)
+	for i := 1; i < len(rows); i++ {
+		if rows[i] == "" && rows[i-1] == "" {
+			t.Errorf("two blank lines in a row at %d:\n%q", i, rows)
+		}
+	}
+}
+
+// TestToolAfterProseSingleGap guards the double gap that showed up between the
+// end of a paragraph and the tool call after it: the reply's own trailing blank
+// line, plus the one pushKind opened for the change of kind.
+func TestToolAfterProseSingleGap(t *testing.T) {
+	m := testModel(t)
+	tn := begin(&m)
+	m.openTurn(tn, "q", "")
+	m.onEvent(tn, agent.TextDelta{Text: "Let me look.\n\n"})
+	m.onEvent(tn, agent.ToolStart{Name: "read", Args: `{"path":"main.go"}`})
+
+	rows := rowsOf(m)
+	for i := 1; i < len(rows); i++ {
+		if rows[i] == "" && rows[i-1] == "" {
+			t.Errorf("two blank lines in a row at %d:\n%q", i, rows)
+		}
+	}
+}
+
 // TestMultilineUserStaysStyled guards a bug that is invisible without reading
 // escape codes: a question that wraps used to lose its colour after the first
 // row. The style was opened once at the front of the string, but every
