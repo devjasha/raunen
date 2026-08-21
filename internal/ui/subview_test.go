@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -35,11 +36,38 @@ func TestSubViewCollapsedTakesNoRows(t *testing.T) {
 // input down and break the one thing the layout guarantees.
 func TestSubViewHintFits(t *testing.T) {
 	for _, width := range []int{20, 24, 30, 40, 60, 80, 120} {
-		s := &subView{desc: strings.Repeat("a very long description ", 10), steps: 7}
+		// A start time well in the past, so the elapsed field is at its widest
+		// — an hours-long run is exactly when the row is most likely to overrun.
+		s := &subView{
+			desc:  strings.Repeat("a very long description ", 10),
+			steps: 7,
+			start: time.Now().Add(-3*time.Hour - 25*time.Minute),
+		}
 		got := ansi.StringWidth(s.hint("⠋", width))
 		if got > width {
 			t.Errorf("width %d: hint renders %d cells:\n%q", width, got, s.hint("⠋", width))
 		}
+	}
+}
+
+// The group clock speaks for the oldest sub-agent: with several running, that is
+// the one that says how long the work has been going.
+func TestSubsHintClockFollowsOldest(t *testing.T) {
+	subs := []*subView{
+		{desc: "recent", start: time.Now().Add(-5 * time.Second)},
+		{desc: "old", start: time.Now().Add(-2 * time.Minute)},
+	}
+	if got := oldestSub(subs).desc; got != "old" {
+		t.Errorf("group clock followed %q, want the oldest sub-agent", got)
+	}
+}
+
+// A finished sub-agent's panel stays open, and its clock must stop with it —
+// otherwise a completed task keeps counting and reads as still running.
+func TestSubViewClockStopsWhenDone(t *testing.T) {
+	s := &subView{start: time.Now().Add(-90 * time.Second), stop: time.Now().Add(-30 * time.Second)}
+	if got := s.took(); got != "1m 00s" {
+		t.Errorf("took() = %q, want the frozen 1m 00s", got)
 	}
 }
 
@@ -148,10 +176,12 @@ func TestWatchedSurvivesASiblingFinishing(t *testing.T) {
 // TestSubsHintFits keeps the multi-agent notice inside one row, at the widths a
 // terminal actually gets used at.
 func TestSubsHintFits(t *testing.T) {
+	// Start times well in the past, so the elapsed field is at its widest — an
+	// hours-long run is when the row is most likely to overrun.
 	subs := []*subView{
-		{id: "t1", desc: "search the ui package", steps: 4},
-		{id: "t2", desc: "search the agent package", steps: 2},
-		{id: "t3", desc: "search the tools package", steps: 9},
+		{id: "t1", desc: "search the ui package", steps: 4, start: time.Now().Add(-4 * time.Hour)},
+		{id: "t2", desc: "search the agent package", steps: 2, start: time.Now().Add(-time.Minute)},
+		{id: "t3", desc: "search the tools package", steps: 9, start: time.Now().Add(-time.Second)},
 	}
 	for _, width := range []int{20, 30, 40, 60, 80, 120} {
 		got := ansi.StringWidth(subsHint(subs, "⠋", width))

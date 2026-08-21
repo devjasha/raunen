@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -36,6 +37,10 @@ type subView struct {
 	// steps counts tool calls, so the hint can say how far along it is without
 	// the panel being open.
 	steps int
+	// start is when this sub-agent was spawned. A delegated task is the work
+	// that most often runs long with nothing else to show for it, so the hint
+	// reports duration alongside the step count.
+	start time.Time
 	// color names this sub-agent. It is assigned from a palette at start and
 	// reused on the panel border, its live lines, and its two transcript markers,
 	// so several running at once are told apart by colour rather than by where
@@ -48,6 +53,10 @@ type subView struct {
 	done   bool
 	answer string
 	err    error
+	// stop freezes the clock when the sub-agent reports back, so a panel left
+	// open on a finished task shows how long it took rather than how long ago
+	// it happened.
+	stop time.Time
 }
 
 // subViewRows is the most the preview panel will show of the live steps. A
@@ -105,6 +114,19 @@ func (s *subView) glyph() string {
 // paint colours text in this sub-agent's colour.
 func (s *subView) paint(text string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(s.color)).Render(text)
+}
+
+// took is how long this sub-agent has been running, or ran for once it is
+// done. Empty when it has no start time, which is what the tests build.
+func (s *subView) took() string {
+	if s.start.IsZero() {
+		return ""
+	}
+	end := time.Now()
+	if !s.stop.IsZero() {
+		end = s.stop
+	}
+	return humanDuration(end.Sub(s.start))
 }
 
 // mark is the coloured glyph that stands in for this sub-agent.
@@ -169,14 +191,39 @@ func subsHint(subs []*subView, spinner string, width int) string {
 		marks += s.mark()
 	}
 	body := fmt.Sprintf(" %d sub-agents", len(subs))
-	tail := fmt.Sprintf(" · %d steps  ctrl+o to watch", steps)
+
+	// The oldest one's clock: with several running, that is the one that says
+	// how long this has been going on, and the others are bounded by it.
+	detail := fmt.Sprintf(" · %d steps", steps)
+	if el := oldestSub(subs).took(); el != "" {
+		detail += " · " + el
+	}
+	tail := detail + "  ctrl+o to watch"
 	if ansi.StringWidth(marks+body+tail) > width {
-		tail = "  ctrl+o"
+		tail = detail + "  ctrl+o"
+	}
+	if ansi.StringWidth(marks+body+tail) > width {
+		tail = detail
 	}
 	if ansi.StringWidth(marks+body+tail) > width {
 		tail = ""
 	}
 	return marks + dimStyle.Render(body) + dimStyle.Render(tail)
+}
+
+// oldestSub is the sub-agent that has been running longest, which is the one
+// whose clock speaks for the group. Never nil for a non-empty slice.
+func oldestSub(subs []*subView) *subView {
+	best := subs[0]
+	for _, s := range subs[1:] {
+		if s.start.IsZero() {
+			continue
+		}
+		if best.start.IsZero() || s.start.Before(best.start) {
+			best = s
+		}
+	}
+	return best
 }
 
 // hint is the one-line notice shown under the input while a sub-agent runs and
@@ -188,6 +235,9 @@ func (s *subView) hint(spinner string, width int) string {
 	step := ""
 	if s.steps > 0 {
 		step = fmt.Sprintf(" · %d steps", s.steps)
+	}
+	if el := s.took(); el != "" {
+		step += " · " + el
 	}
 	tail := step + "  ctrl+o to watch"
 
