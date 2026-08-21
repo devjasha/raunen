@@ -183,6 +183,7 @@ raunen                              # start the TUI in the current directory
 raunen -m ollama/qwen3:8b           # pick a model for this run
 raunen 'what does main.go do?'      # one-shot; stdout stays clean for pipes
 raunen --json 'what changed?'       # one-shot, machine-readable
+raunen --image ui.png 'describe it' # one-shot with an attachment
 raunen --no-save 'quick question'   # one-shot, leaving no session behind
 raunen acp                          # serve the Agent Client Protocol on stdio
 raunen --continue                   # resume this directory's last session
@@ -247,6 +248,9 @@ retype — and sends them along with the message. See [Skills](#skills).
 | `/providers` | list configured endpoints |
 | `/skills` | list the skills you can reference with `#` |
 | `/permissions` | what runs without asking (`/perms`) |
+| `/image <path>` | attach an image to the next message (`/img`) |
+| `/images [clear]` | list attached images, or drop them |
+| `/paste` | attach the image on the clipboard |
 | `/key <provider>` | add an API key |
 | `/sessions` | list saved sessions |
 | `/resume <id>` | pick up a saved session |
@@ -522,6 +526,67 @@ line breaks yourself.
 and an audio library — several hundred megabytes and a real runtime, for a job
 a dedicated dictation tool already does better and system-wide. The single
 static binary is worth more than saving you a keystroke.
+
+## Images
+
+Attach a screenshot, a mockup or a diagram and the model sees it alongside the
+question:
+
+```
+› /image ./design.png
+  ▣ attached design.png  48 KiB  (1 pending)
+› why does the sidebar overlap the content?
+```
+
+**Or just drag the file onto the window.** A terminal has no notion of a drop —
+dragging a file in pastes its path — so a paste that is nothing but paths to
+images that exist is taken as a drop and staged. Escaped spaces, quoted paths,
+`file://` URLs and several files at once all work.
+
+`/img` is an alias, `/images` lists what is staged and `/images clear` drops it.
+On a Mac, `/paste` takes what is on the clipboard; elsewhere it uses `wl-paste`
+or `xclip`. Writing a path into the message works too, with no command at all:
+
+```
+› have a look at shot.png and tell me what is wrong
+```
+
+Headless runs take `--image`, repeatable:
+
+```sh
+raunen --image before.png --image after.png 'what changed?'
+```
+
+PNG, JPEG, GIF and WebP, up to 20 MiB each. The type is read from the bytes
+rather than the extension, because a JPEG saved as `.png` is common enough and
+declaring the wrong type makes the endpoint fail for a reason that has nothing
+to do with the actual problem.
+
+**Pasting text is never hijacked.** Only a paste consisting entirely of image
+paths that exist counts as a drop. Prose that happens to mention `shot.png`, a
+path that is not there, a mix of an image and a text file, or anything with a
+newline in it all reach the input as text — the asymmetry is deliberate, since
+swallowing a paste is far worse than making you type `/image`.
+
+**Attachments go with one message and are then cleared.** An image that stayed
+staged would silently ride along with every later question, which is expensive
+and confusing. It stays in the transcript, though — a later "what colour was
+that button" has to be answerable by looking again, so the picture remains on
+the message it was sent with for the rest of the conversation, including after
+`--continue` reloads it from disk.
+
+**The filenames are repeated in the prose**, as `[attached: before.png,
+after.png]`. An image block on the wire carries no name, so without this the
+model can see two pictures and has no way to say which is which.
+
+**A request only changes shape when it carries an image.** Content normally
+goes as a plain string; several local runtimes reject the array form outright,
+so it is used for the one case that needs it and nothing else.
+
+There is no fallback for a model that cannot see. fx routes those to a hosted
+vision model behind the scenes; raunen does not, because the point of the thing
+is that it talks to the endpoint you configured and nothing else. Attach an
+image to a text-only model and it will tell you it cannot read it.
 
 ## Modes
 
@@ -1823,6 +1888,7 @@ oneshot.go                 one-shot runs, --json and exit codes
 acp.go                     the acp subcommand, and building an agent per directory
 internal/acp               Agent Client Protocol over stdio, for editors
 internal/agent             the tool-use loop, modes, compaction and trimming
+internal/attach            loading images from a path or the clipboard
 internal/companion         the mascot's progress across sessions
 internal/config            providers, models and saved skills
 internal/provider          OpenAI-compatible streaming client

@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"raunen/internal/agent"
+	"raunen/internal/provider"
 	"raunen/internal/session"
 )
 
@@ -78,6 +79,8 @@ type oneShotOpts struct {
 	json bool
 	// save writes the conversation so --continue can pick it up.
 	save bool
+	// images are attachments for the question.
+	images []provider.Image
 }
 
 // oneShot runs a single turn and exits.
@@ -94,7 +97,7 @@ func oneShot(ag *agent.Agent, sess *session.Session, prompt string, opts oneShot
 	defer stop()
 
 	events := make(chan agent.Event, 64)
-	go ag.Run(ctx, prompt, events)
+	go ag.RunWith(ctx, prompt, opts.images, events)
 
 	// Empty rather than nil, so the field marshals as [] and a consumer can
 	// iterate it without checking for null first.

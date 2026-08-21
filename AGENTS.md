@@ -23,6 +23,10 @@ or newer; the only dependencies are Bubble Tea and Lip Gloss.
   result is bounded at the registry, not in the tool: what does not fit is kept
   in the result store and reachable through the `result` handle, so an MCP tool
   cannot bypass the cap by being added later
+- `internal/attach` — loading images from a path or the clipboard, and the size
+  and format limits. The wire form lives in `provider.toWire`, not on the
+  message type: a session is saved as `provider.Message` too, and the endpoint's
+  shape is not what belongs on disk
 - `internal/fileset` — what git considers part of the project; shared by the
   search tools and by `@` completion, so the two cannot disagree
 - `internal/permission` — standing allow/deny rules. Gating lives in one place,
