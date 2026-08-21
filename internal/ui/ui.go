@@ -162,6 +162,11 @@ type turn struct {
 	events chan agent.Event
 	cancel context.CancelFunc
 
+	// start is when this turn began, so the status row can say how long it has
+	// been going. A local model on a long turn gives no other sign of progress,
+	// and "working" alone cannot be told apart from "wedged".
+	start time.Time
+
 	// pending is assistant text received but not yet turned into whole lines.
 	pending string
 	// think is the tail of a reasoning model's thinking, shown as a single
@@ -768,6 +773,25 @@ func (m Model) blockText(block int) string {
 // whole screen — the spinner, the border, whether ctrl+c means "stop" or
 // "quit" — so it asks about every turn rather than a particular one.
 func (m Model) busy() bool { return len(m.turns) > 0 }
+
+// elapsed is how long the oldest live turn has been running, or empty when
+// nothing is. Turns started before this field existed — and the zero turns the
+// tests build — report nothing rather than a duration measured from the epoch.
+func (m Model) elapsed() string {
+	oldest := time.Time{}
+	for _, t := range m.turns {
+		if t.start.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || t.start.Before(oldest) {
+			oldest = t.start
+		}
+	}
+	if oldest.IsZero() {
+		return ""
+	}
+	return humanDuration(time.Since(oldest))
+}
 
 // live finds a turn by identity, nil once it has ended. Events carry the turn
 // they came from rather than an index, so a turn finishing cannot misroute the
@@ -1917,6 +1941,7 @@ func (m *Model) send(text string) (tea.Model, tea.Cmd) {
 		ag:     m.ag.Fork(),
 		cancel: cancel,
 		events: make(chan agent.Event, 64),
+		start:  time.Now(),
 	}
 	if m.busy() {
 		// Two answers are about to arrive into one transcript, so from here on
@@ -2073,7 +2098,7 @@ func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
 		// the sub-agent palette and reused on the panel, its live lines, and the
 		// two transcript markers, so several running at once are told apart by
 		// colour rather than by where they sit.
-		s := &subView{id: e.ID, desc: e.Description, owner: t, color: nextSubColor()}
+		s := &subView{id: e.ID, desc: e.Description, owner: t, color: nextSubColor(), start: time.Now()}
 		m.subs = append(m.subs, s)
 		m.pushTurn(t, entry{
 			kind:  kindWork,
@@ -2091,6 +2116,7 @@ func (m *Model) onEvent(t *turn, ev agent.Event) (tea.Model, tea.Cmd) {
 		// recoloured to this sub-agent so it is told from its siblings.
 		if s := m.sub(e.ID); s != nil {
 			s.done = true
+			s.stop = time.Now()
 			s.answer = e.Summary
 			s.err = e.Err
 		}
@@ -2559,7 +2585,7 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		focus := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
 		ctx, cancel := context.WithCancel(context.Background())
 		m.turnSeq++
-		t := &turn{seq: m.turnSeq, cancel: cancel, events: make(chan agent.Event, 8)}
+		t := &turn{seq: m.turnSeq, cancel: cancel, events: make(chan agent.Event, 8), start: time.Now()}
 		m.turns = append(m.turns, t)
 		m.frame = 0
 		m.scroll = 0
@@ -2789,6 +2815,12 @@ func (m Model) View() tea.View {
 		if n := len(m.turns); n > 1 {
 			work = fmt.Sprintf("working on %d turns", n)
 			tail = "  esc cancels the newest  ·  ctrl+c all"
+		}
+		// How long the oldest live turn has been going. With several running
+		// that is the one worth reporting: it is the one closest to being
+		// stuck, and the newer ones are bounded by it.
+		if el := m.elapsed(); el != "" {
+			work += " · " + el
 		}
 		status = spinStyle.Render(f) + " " +
 			dimStyle.Render(ansi.Truncate(work, max(10, m.innerWidth()-len(tail)-6), "…")) +
@@ -3087,6 +3119,23 @@ func humanTokens(n int) string {
 		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
 	default:
 		return fmt.Sprintf("%dB", n/1_000_000_000)
+	}
+}
+
+// humanDuration renders elapsed time as 8s, 2m 13s, 1h 04m. Seconds are dropped
+// past an hour: at that length the second is noise, and a field that stops
+// changing every tick reads as progress rather than a stopwatch.
+//
+// Under a second renders as 0s rather than empty, so the field appears the
+// moment work starts instead of blinking into existence a second later.
+func humanDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm %02ds", int(d.Minutes()), int(d.Seconds())%60)
+	default:
+		return fmt.Sprintf("%dh %02dm", int(d.Hours()), int(d.Minutes())%60)
 	}
 }
 
