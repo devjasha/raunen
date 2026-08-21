@@ -1063,7 +1063,7 @@ func (m Model) viewHeight() int {
 		h -= m.keyAsk.height()
 	}
 	if w := m.watched(); w != nil {
-		h -= w.height(m.expanded, m.height-chromeLines-1)
+		h -= w.height(m.expanded, m.height-chromeLines-1, m.innerWidth())
 	}
 	if m.sug != nil {
 		h -= m.sug.height()
@@ -1542,14 +1542,16 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "ctrl+o":
-		// One key cycles a sub-agent's window closed → preview → expanded →
-		// the next one (or closed). Doing nothing when none is running is
-		// deliberate: the key means "show me the sub-agent", and inventing
-		// something for it to do when there isn't one would only surprise.
+		// One key cycles one sub-agent's window closed → preview → expanded →
+		// closed. Which sub-agent is a separate question, answered by ←/→:
+		// cycling size and selection through the same key meant six presses to
+		// see the third of three, and no way back to the first. Doing nothing
+		// when none is running is deliberate — the key means "show me the
+		// sub-agent", and inventing something for it when there isn't one would
+		// only surprise.
 		switch {
 		case len(m.subs) == 0:
-			// Nothing running. Inventing something for the key to do here would
-			// only surprise.
+			// Nothing running.
 		case m.watching == "":
 			// Closed → preview of the first running sub-agent.
 			m.watching = m.subs[0].id
@@ -1558,23 +1560,38 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// Preview → expanded window (steps and, once done, the answer).
 			m.expanded = true
 		default:
-			// Expanded → next sub-agent's preview, or closed after the last.
+			m.watching = ""
 			m.expanded = false
-			i := 0
-			for j, s := range m.subs {
-				if s.id == m.watching {
-					i = j
-					break
-				}
-			}
-			if i+1 < len(m.subs) {
-				m.watching = m.subs[i+1].id
-			} else {
-				m.watching = ""
-			}
 		}
 		// The panel takes its rows from the transcript, so what is visible
 		// changes under the reader; keep the newest end in view.
+		m.clampScroll()
+		return *m, nil
+
+	// ←/→ move between sub-agents while a panel is open, keeping its size: with
+	// several running, "which one" is the question actually being asked, and the
+	// arrows are where a reader looks for it.
+	//
+	// Only with an empty input, and only with a panel open on more than one
+	// sub-agent. Moving the cursor through what is being typed is the arrows'
+	// first job and it must not become unreliable; an empty line has no cursor
+	// to move, so there is nothing to take away.
+	case "left", "right":
+		if m.watched() == nil || len(m.subs) < 2 || m.input.Value() != "" {
+			break
+		}
+		step := 1
+		if msg.String() == "left" {
+			step = -1
+		}
+		for j, s := range m.subs {
+			if s.id == m.watching {
+				// Wraps, so the arrows are a ring rather than a dead end at
+				// either edge.
+				m.watching = m.subs[(j+step+len(m.subs))%len(m.subs)].id
+				break
+			}
+		}
 		m.clampScroll()
 		return *m, nil
 
@@ -2767,7 +2784,7 @@ func (m Model) View() tea.View {
 			}
 		}
 		rows = append(rows, strings.Split(
-			w.render(m.innerWidth(), f, i, len(m.subs), w.height(m.expanded, m.height-chromeLines-1), m.expanded),
+			w.render(m.innerWidth(), f, i, len(m.subs), w.height(m.expanded, m.height-chromeLines-1, m.innerWidth()), m.expanded),
 			"\n")...)
 	}
 	if m.pick != nil {
@@ -2885,7 +2902,7 @@ func (m Model) View() tea.View {
 	if m.pick != nil {
 		cur := tea.NewCursor(padX+1+m.pick.cursorCol(), m.viewHeight()+1)
 		if w := m.watched(); w != nil {
-			cur.Y += w.height(m.expanded, m.height-chromeLines-1)
+			cur.Y += w.height(m.expanded, m.height-chromeLines-1, m.innerWidth())
 		}
 		v.Cursor = cur
 		return v
@@ -2897,7 +2914,7 @@ func (m Model) View() tea.View {
 			// the two heading rows inside it.
 			cur.Y += m.viewHeight() + 1 + 3
 			if w := m.watched(); w != nil {
-				cur.Y += w.height(m.expanded, m.height-chromeLines-1)
+				cur.Y += w.height(m.expanded, m.height-chromeLines-1, m.innerWidth())
 			}
 			cur.X += boxPadX + 1 + padX
 			v.Cursor = cur
@@ -2914,7 +2931,7 @@ func (m Model) View() tea.View {
 			below++
 		}
 		if w := m.watched(); w != nil {
-			below += w.height(m.expanded, m.height-chromeLines-1)
+			below += w.height(m.expanded, m.height-chromeLines-1, m.innerWidth())
 		}
 		if m.pick != nil {
 			below += m.pick.height()
