@@ -64,6 +64,7 @@ var keyHelp = []string{
 	"@                        mark a file or folder for the model",
 	"#                        pull a saved skill into the prompt",
 	"ctrl+o                   watch the running sub-agent",
+	"←/→                      switch between running sub-agents",
 }
 
 // label is the command as it is offered: name and arguments together.

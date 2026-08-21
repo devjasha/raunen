@@ -31,6 +31,65 @@ func TestSubViewCollapsedTakesNoRows(t *testing.T) {
 	}
 }
 
+// TestSubViewHeightMatchesRender is the bug that made expanding a panel move
+// the input: height() guessed the rows from the step count while render() drew
+// the answer and the edit window too, so what the layout reserved and what
+// appeared on screen disagreed — and everything below the panel, the prompt
+// included, slid by the difference.
+func TestSubViewHeightMatchesRender(t *testing.T) {
+	code := &codeBlock{
+		path: "internal/thing.go", label: "+40 -2", numbered: true,
+	}
+	for i := 0; i < 40; i++ {
+		code.lines = append(code.lines, diffLine{
+			kind: lineAdd, text: fmt.Sprintf("\tsomething(%d)", i), newNo: i + 1,
+		})
+	}
+
+	cases := []struct {
+		name string
+		s    *subView
+	}{
+		{"empty", &subView{id: "t", desc: "task", color: "9"}},
+		{"few steps", &subView{id: "t", desc: "task", color: "9",
+			lines: []string{"⏺ read a.go", "⏺ grep foo"}}},
+		{"long description", &subView{id: "t", color: "9",
+			desc:  strings.Repeat("a very long description ", 8),
+			lines: []string{"⏺ read a.go"}}},
+		{"done with a long answer", &subView{id: "t", desc: "task", color: "9",
+			done: true, answer: strings.Repeat("an answer sentence. ", 80),
+			lines: []string{"⏺ read a.go", "⏺ grep foo"}}},
+		{"an edit window", &subView{id: "t", desc: "task", color: "9",
+			lines: []string{"⏺ write internal/thing.go"}, codes: []*codeBlock{code}}},
+		{"steps, answer and a window", &subView{id: "t", desc: "task", color: "9",
+			done: true, answer: strings.Repeat("an answer sentence. ", 40),
+			lines: []string{"⏺ a", "⏺ b", "⏺ c", "⏺ d", "⏺ e", "⏺ f", "⏺ g", "⏺ h"},
+			codes: []*codeBlock{code}}},
+	}
+
+	for _, c := range cases {
+		// Many steps is the ordinary case for a long-running sub-agent, so the
+		// tall variants are covered as well as the ones above.
+		for _, width := range []int{40, 80, 120} {
+			for _, avail := range []int{6, 12, 25, 37} {
+				for _, expanded := range []bool{false, true} {
+					want := c.s.height(expanded, avail, width)
+					got := strings.Count(
+						c.s.render(width, "⠋", 0, 1, want, expanded), "\n") + 1
+					if got != want {
+						t.Errorf("%s (width %d, avail %d, expanded %v): reserved %d rows, drew %d",
+							c.name, width, avail, expanded, want, got)
+					}
+					if want > avail-1 {
+						t.Errorf("%s (width %d, avail %d, expanded %v): took %d of %d rows, leaving none for the transcript",
+							c.name, width, avail, expanded, want, avail)
+					}
+				}
+			}
+		}
+	}
+}
+
 // TestSubViewHintFits checks the hint stays inside the width it is given. It
 // sits on the status row, which is a single line — an overrun would push the
 // input down and break the one thing the layout guarantees.
@@ -114,10 +173,9 @@ func TestSubViewToggle(t *testing.T) {
 	}
 }
 
-// TestSubViewCyclesThroughSiblings covers the key with several running: it
-// previews each in turn, expands, then moves to the next, and the press after
-// the last closes the panel — so one key means both "look" and "look at the
-// other one".
+// TestSubViewCyclesThroughSiblings covers the two keys with several running:
+// ctrl+o sizes one panel and ←/→ choose which sub-agent it is on, so getting to
+// the third of three is one press rather than five, and there is a way back.
 func TestSubViewCyclesThroughSiblings(t *testing.T) {
 	m := testModel(t)
 	for _, id := range []string{"t1", "t2", "t3"} {
@@ -125,24 +183,60 @@ func TestSubViewCyclesThroughSiblings(t *testing.T) {
 	}
 
 	type step struct {
-		w string
-		e bool
+		key string
+		w   string
+		e   bool
 	}
 	for _, want := range []step{
-		{"t1", false},
-		{"t1", true},
-		{"t2", false},
-		{"t2", true},
-		{"t3", false},
-		{"t3", true},
-		{"", false},
+		// ctrl+o alone sizes the panel and never changes which one is watched.
+		{"ctrl+o", "t1", false},
+		{"ctrl+o", "t1", true},
+		{"ctrl+o", "", false},
+		// The arrows walk the ring, in both directions and wrapping either way.
+		{"ctrl+o", "t1", false},
+		{"right", "t2", false},
+		{"right", "t3", false},
+		{"right", "t1", false},
+		{"left", "t3", false},
+		// Size is kept across a switch: expanded on one is expanded on the next.
+		{"ctrl+o", "t3", true},
+		{"left", "t2", true},
 	} {
-		ret, _ := m.onKey(keyPress("ctrl+o"))
+		ret, _ := m.onKey(keyPress(want.key))
 		m = ret.(Model)
 		if m.watching != want.w || m.expanded != want.e {
-			t.Fatalf("after press: watching=%q(%v), want %q(%v)",
-				m.watching, m.expanded, want.w, want.e)
+			t.Fatalf("after %s: watching=%q(%v), want %q(%v)",
+				want.key, m.watching, m.expanded, want.w, want.e)
 		}
+	}
+}
+
+// The arrows belong to the input whenever there is something to move a cursor
+// through: switching panels must not make editing a typed line unreliable.
+func TestSubViewArrowsYieldToTheInput(t *testing.T) {
+	m := testModel(t)
+	for _, id := range []string{"t1", "t2"} {
+		m.subs = append(m.subs, &subView{id: id, desc: id})
+	}
+	m.watching = "t1"
+	m.input.SetValue("hello")
+
+	ret, _ := m.onKey(keyPress("right"))
+	if got := ret.(Model).watching; got != "t1" {
+		t.Errorf("→ switched to %q while text was typed, want the input to keep the key", got)
+	}
+}
+
+// With no panel open the arrows are the input's, whatever is running.
+func TestSubViewArrowsNeedAnOpenPanel(t *testing.T) {
+	m := testModel(t)
+	for _, id := range []string{"t1", "t2"} {
+		m.subs = append(m.subs, &subView{id: id, desc: id})
+	}
+
+	ret, _ := m.onKey(keyPress("right"))
+	if got := ret.(Model).watching; got != "" {
+		t.Errorf("→ opened a panel on %q with none open, want the key left alone", got)
 	}
 }
 

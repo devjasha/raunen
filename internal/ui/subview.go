@@ -74,6 +74,12 @@ const expandedRows = 30
 // preview is for — to watch the change take shape, not to read the file.
 const subViewCodeRows = 4
 
+// codeFrameRows is what an edit window costs beyond its code: two border rows,
+// the header naming the file, and the "… n more lines" marker when it is cut
+// short. The panel has to pay for those out of its body budget or the window
+// draws taller than the rows reserved for it.
+const codeFrameRows = 4
+
 // subMarks name sub-agents. Colour alone is not enough — a narrow palette or a
 // colour-blind reader would be left with two identical marks — so the glyph
 // varies too, the way the turn marks do. They share the diamond family so a
@@ -147,13 +153,53 @@ func (s *subView) add(line string) {
 // available space as it can use; the preview keeps to the last few steps. avail
 // is the rows left for the panel and the transcript together, so the panel
 // never eats the whole screen — at least one transcript row is always kept.
-func (s *subView) height(expanded bool, avail int) int {
-	base := min(len(s.lines), subViewRows) + 3
-	if !expanded {
-		return fitPanel(base, avail)
+//
+// It is measured from the same rows render draws, at the same width, rather
+// than guessed from the step count: the answer and the edit window are body
+// rows too, and a panel that reserved a different number of rows than it drew
+// moved everything below it — the input included — as it was opened.
+func (s *subView) height(expanded bool, avail, width int) int {
+	// A panel is a header, a body and two border rows; below four rows there is
+	// nothing left to put in it, and one row has to stay with the transcript.
+	if avail < panelChrome+1 {
+		return 0
 	}
-	big := min(avail, expandedRows)
-	return fitPanel(max(base, big), avail)
+	inner := panelInner(width)
+	h := fitPanel(len(s.bodyRows(inner, bodyBudget(expanded, avail), expanded))+panelChrome, avail)
+	// What the body wants and what avail allows can differ, and render sizes the
+	// body from the number returned here — so settle on the height that produces
+	// itself. bodyRows never returns more rows than it was given, so this only
+	// ever shrinks and cannot loop.
+	for {
+		next := len(s.bodyRows(inner, h-panelChrome, expanded)) + panelChrome
+		if next >= h {
+			return h
+		}
+		h = next
+	}
+}
+
+// panelChrome is what the panel costs before any body: the header row and the
+// two border rows.
+const panelChrome = 3
+
+// bodyBudget is the most body rows the panel may use before avail is applied:
+// the last few steps and a shallow edit window when previewing, as much as the
+// cap allows when expanded.
+func bodyBudget(expanded bool, avail int) int {
+	if expanded {
+		return min(avail, expandedRows) - panelChrome
+	}
+	return subViewRows + subViewCodeRows + codeFrameRows
+}
+
+// panelInner is the width available inside the panel's border and padding. It
+// is derived from the width render hands lipgloss, not guessed alongside it: a
+// row measured against a wider inner than the box really has wraps, and a
+// wrapped row makes the panel taller than the rows reserved for it. Style.Width
+// counts the border as well as the padding, so four cells come off, not two.
+func panelInner(width int) int {
+	return max(4, max(10, width-2)-4)
 }
 
 // fitPanel keeps a desired panel size inside what is available, leaving at least
@@ -267,53 +313,39 @@ func (s *subView) hint(spinner string, width int) string {
 // expanded opens the window to show the full step history and — once the sub is
 // done — its answer.
 func (s *subView) render(width int, spinner string, i, n, rows int, expanded bool) string {
-	inner := max(20, width-4)
+	inner := panelInner(width)
 
-	label := "  ctrl+o to close"
+	// ctrl+o walks one panel closed → preview → expanded → closed; with several
+	// running, ←/→ move between them, so the position says which of them this is.
+	label := "  ctrl+o to expand"
 	if expanded {
-		label = "  ctrl+o to shrink"
-	} else if n > 1 {
-		label = fmt.Sprintf("  %d/%d  ctrl+o for next", i+1, n)
+		label = "  ctrl+o to close"
 	}
+	if n > 1 {
+		// Which of them this is, and both keys: the arrows are new, and with a
+		// panel open there is nowhere else that says how to put it away.
+		label = fmt.Sprintf("  %d/%d  ←/→ switch · ctrl+o size", i+1, n)
+	}
+
+	// The header is one row, and it has to stay one row: wrapping to two makes
+	// the panel taller than the rows reserved for it, which moves everything
+	// below — the input included. So the description is given what the fixed
+	// parts leave, and the finished row is truncated again as a guard, since at
+	// twenty-odd cells even the fixed parts do not fit.
+	lead, state := s.glyph()+" "+spinner+" working on  ", "" // running
+	if s.done {
+		lead, state = s.glyph()+" ", "  ✓ done"
+	}
+	room := inner - ansi.StringWidth(lead) - ansi.StringWidth(state) - ansi.StringWidth(label)
+	head := s.paint(lead+ansi.Truncate(s.desc, max(0, room), "…")) +
+		dimStyle.Render(state) + dimStyle.Render(label)
 
 	var b strings.Builder
-	if s.done {
-		b.WriteString(s.paint(s.glyph()+" "+s.desc) + dimStyle.Render("  ✓ done") + dimStyle.Render(label))
-	} else {
-		b.WriteString(s.paint(s.glyph()+" "+spinner+" working on") +
-			dimStyle.Render("  "+ansi.Truncate(s.desc, max(10, inner-34), "…")) + dimStyle.Render(label))
-	}
+	b.WriteString(ansi.Truncate(head, inner, "…"))
 
 	// Header + border account for three rows; the rest is body.
-	body := max(0, rows-3)
-	var bodyStr string
-	if expanded {
-		bodyStr = s.expandedBody(inner, body)
-	} else {
-		var sb strings.Builder
-		shown := s.lines
-		if len(shown) > subViewRows {
-			shown = shown[len(shown)-subViewRows:]
-		}
-		for _, l := range shown {
-			sb.WriteString("\n" + ansi.Truncate(l, inner, "…"))
-		}
-		bodyStr = sb.String()
-	}
-	b.WriteString(bodyStr)
-
-	// The edit window rides at the tail, after the steps (and the answer, once
-	// the sub-agent is done), so the eye lands on the file most recently touched.
-	// The steps and answer already written take their rows first; counting their
-	// newlines leaves the window exactly the room left in the body, so its border
-	// never runs past the panel's. When there is nothing left it is dropped
-	// rather than overflowing — the steps are the point of the panel, the window
-	// is a bonus that must not cost them a row.
-	room := body - strings.Count(bodyStr, "\n")
-	if rows := s.codeRows(inner, room, expanded); len(rows) > 0 {
-		for _, r := range rows {
-			b.WriteString("\n" + r)
-		}
+	for _, r := range s.bodyRows(inner, max(0, rows-panelChrome), expanded) {
+		b.WriteString("\n" + r)
 	}
 
 	return lipgloss.NewStyle().
@@ -322,6 +354,41 @@ func (s *subView) render(width int, spinner string, i, n, rows int, expanded boo
 		Padding(0, 1).
 		Width(max(10, width-2)).
 		Render(b.String())
+}
+
+// bodyRows is everything inside the panel's border below the header: the steps,
+// the answer once the sub-agent is done, and the edit window at the tail. It is
+// what render draws and what height measures, so the two cannot disagree — a
+// panel that reserved more rows than it drew left a gap the input floated up
+// into, and one that drew more than it reserved pushed the input off the
+// bottom. Never longer than body.
+func (s *subView) bodyRows(inner, body int, expanded bool) []string {
+	if body <= 0 {
+		return nil
+	}
+
+	var rows []string
+	if expanded {
+		rows = s.answerRows(inner, body)
+	} else {
+		shown := s.lines
+		if len(shown) > subViewRows {
+			shown = shown[len(shown)-subViewRows:]
+		}
+		for _, l := range shown {
+			rows = append(rows, ansi.Truncate(l, inner, "…"))
+		}
+	}
+	if len(rows) > body {
+		// The newest steps are the ones being watched, so the head goes first.
+		rows = rows[len(rows)-body:]
+	}
+
+	// The edit window rides at the tail, after the steps (and the answer, once
+	// the sub-agent is done), so the eye lands on the file most recently
+	// touched. It takes only the rows the steps left over: they are the point of
+	// the panel, and the window is a bonus that must not cost them a row.
+	return append(rows, s.codeRows(inner, body-len(rows), expanded)...)
 }
 
 // codeRows renders the panel's edit window: the most recent write or edit this
@@ -333,61 +400,65 @@ func (s *subView) render(width int, spinner string, i, n, rows int, expanded boo
 // panel asks for maxBodyLines (the whole window), and whichever is smaller —
 // that cap or the rows still free in the body — wins, so the box is never taller
 // than the space left and the same window reads shallow when collapsed and full
-// when opened. An empty width is returned when there is no window or no room, so
-// the caller can add the rows it has without special-casing the absence.
+// when opened. Nothing is returned when there is no window or no room, so the
+// caller can add the rows it has without special-casing the absence.
 func (s *subView) codeRows(inner, room int, expanded bool) []string {
 	if room <= 0 || len(s.codes) == 0 {
 		return nil
 	}
 	c := s.codes[len(s.codes)-1]
-	cap := subViewCodeRows
+	n := subViewCodeRows
 	if expanded {
-		cap = maxBodyLines
+		n = maxBodyLines
 	}
-	if cap > room {
-		cap = room
+	// The box costs more rows than the code in it — two borders, a header, and
+	// the "more lines" marker when it is cut short — and how many depends on
+	// whether it was cut at all. Asking for room minus a guess would sometimes
+	// overflow the panel, so the count is measured and walked down until it
+	// fits: at most codeFrameRows+1 tries, on a window of a dozen rows.
+	for n = min(n, room); n >= 1; n-- {
+		if rows := c.rowsCapped(inner, n); len(rows) <= room {
+			return rows
+		}
 	}
-	rows := c.rowsCapped(inner, cap)
-	if len(rows) == 0 {
-		return nil
-	}
-	return rows
+	return nil
 }
 
-// expandedBody appends the sub-agent's full step history and, once it has
-// finished, its answer, fitting within body rows. The answer lives here even
-// though the transcript does not: the caller asked for an answer, and this is
-// where it is shown. The answer is kept if it has to be traded against the
-// steps, so a long reply is never squeezed out by its own working-out.
-func (s *subView) expandedBody(inner, body int) string {
+// answerRows is the sub-agent's full step history and, once it has finished, its
+// answer, fitting within body rows. The answer lives here even though the
+// transcript does not: the caller asked for an answer, and this is where it is
+// shown. The answer is kept if it has to be traded against the steps, so a long
+// reply is never squeezed out by its own working-out — and it is the tail of a
+// long answer that is cut, since the steps above it say what it is answering.
+func (s *subView) answerRows(inner, body int) []string {
 	if body <= 0 {
-		return ""
+		return nil
 	}
-	answer := []string{}
+	var answer []string
 	if s.done && s.answer != "" {
 		answer = strings.Split(ansi.Wrap(s.answer, inner, ""), "\n")
 	}
 	sep := 0
-	if s.done && len(answer) > 0 {
+	if len(answer) > 0 {
 		sep = 1
 	}
+	if len(answer)+sep > body {
+		answer = answer[:max(0, body-sep)]
+	}
 	steps := s.lines
-	if len(steps)+sep+len(answer) > body {
-		room := max(0, body-sep-len(answer))
-		if len(steps) > room {
-			steps = steps[len(steps)-room:]
-		}
+	if room := max(0, body-sep-len(answer)); len(steps) > room {
+		steps = steps[len(steps)-room:]
 	}
 
-	var b strings.Builder
+	rows := make([]string, 0, len(steps)+sep+len(answer))
 	for _, l := range steps {
-		b.WriteString("\n" + ansi.Truncate(l, inner, "…"))
+		rows = append(rows, ansi.Truncate(l, inner, "…"))
 	}
-	if s.done && len(answer) > 0 {
-		b.WriteString("\n" + dimStyle.Render(strings.Repeat("─", max(4, inner))))
+	if len(answer) > 0 {
+		rows = append(rows, dimStyle.Render(strings.Repeat("─", max(4, inner))))
 		for _, l := range answer {
-			b.WriteString("\n" + s.paint(l))
+			rows = append(rows, s.paint(l))
 		}
 	}
-	return b.String()
+	return rows
 }

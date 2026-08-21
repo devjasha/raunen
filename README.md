@@ -202,7 +202,8 @@ raunen -version                     # print the version
 | `#` | pull a saved skill into the prompt |
 | `↑` / `↓` | move through the completions while typing `/`, `@` or `#` |
 | `esc` | cancel the running turn, or drop a pending reply |
-| `ctrl+o` | watch a running sub-agent, or step to the next |
+| `ctrl+o` | watch a running sub-agent: preview, expand, close |
+| `←` / `→` | switch between running sub-agents while a panel is open |
 | `ctrl+c` | cancel if working, otherwise quit |
 | `pgup` / `pgdn` | scroll the transcript |
 | `shift+↑` / `shift+↓` | scroll by a line |
@@ -1530,9 +1531,10 @@ While they run the status row says so, and `ctrl+o` opens a panel to watch one:
 ◆ ⠹ 3 sub-agents · 15 steps  ctrl+o to watch
 ```
 
-Pressing it again steps to the next, and the press after the last puts the panel
-away. Sub-agents work in their own panel above the input, so their steps never
-flood the transcript:
+Pressing it again opens the panel to its full window — the steps, and the answer
+once the sub-agent has reported back — and a third press puts it away. With
+several running, `←` and `→` move the panel between them. Sub-agents work in
+their own panel above the input, so their steps never flood the transcript:
 
 ```
   ╭──────────────────────────────────────────────────────────╮
