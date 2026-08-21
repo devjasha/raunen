@@ -639,6 +639,11 @@ type entry struct {
 	// of rows would keep the border width it was built at and leave a ragged
 	// column down the screen. See codeBlock.
 	code *codeBlock
+	// list marks a line the markdown renderer made a bullet or a numbered item.
+	// Models routinely put a blank line between every item, which is invisible
+	// in the source and a wasted row on screen; addText uses this to close the
+	// gap between adjacent items while leaving paragraph breaks alone.
+	list bool
 	// toolLive marks a tool call — its start line, its code window, and its
 	// result — as the agent's current step. The next tool call replaces it
 	// rather than adding another line, so the transcript shows only what the
@@ -978,8 +983,17 @@ func (m *Model) add(lines ...string) {
 // Everything that writes conversation goes through here, so the rhythm of the
 // transcript is decided in one place rather than at each call site.
 func (m *Model) pushKind(e entry) {
+	// A model that ends a paragraph with two or three newlines means one
+	// paragraph break; rendering each of them costs rows that say nothing.
+	if e.blankLine() && !e.rule {
+		m.blank()
+		return
+	}
 	if spacedApart(m.lastKind(), e.kind) {
-		m.push(entry{})
+		// blank() rather than push(entry{}): a reply that ended on an empty
+		// line has already left one there, and lastKind reads straight through
+		// it, so pushing unconditionally spends two rows on one change of kind.
+		m.blank()
 	}
 	m.push(e)
 }
@@ -2362,10 +2376,35 @@ func (m *Model) addText(t *turn, lines []string) {
 	for _, l := range lines {
 		e := t.md.entry(l)
 		e.kind = kindReply
+		// A blank line between two list items is a habit of the model's, not a
+		// paragraph break: dropping it makes a list read as one block instead
+		// of at double spacing. The blank is only removed once the item after
+		// it arrives, so a list that ends on a blank line still gets its gap
+		// before whatever prose follows.
+		if e.list {
+			m.dropTrailingBlankAfterList()
+		}
 		// Only the first line can need a gap opening before it; once inside a
 		// reply, consecutive lines are the same kind and stay together.
 		m.pushTurn(t, e)
 	}
+}
+
+// dropTrailingBlankAfterList removes a single blank line sitting between the
+// transcript's last list item and the item about to be appended.
+func (m *Model) dropTrailingBlankAfterList() {
+	n := len(m.entries)
+	if n < 2 {
+		return
+	}
+	if last := m.entries[n-1]; !last.blankLine() || last.rule {
+		return
+	}
+	if !m.entries[n-2].list {
+		return
+	}
+	m.entries = m.entries[:n-1]
+	m.rewrap()
 }
 
 // flush turns a turn's buffered text into transcript lines, including a final
@@ -2400,7 +2439,7 @@ func (m *Model) pushTurn(t *turn, e entry) {
 		e.first = t.tag + " " + e.first
 		e.cont = t.tag + " " + e.cont
 		if m.lastTurn() != t.seq {
-			m.push(entry{})
+			m.blank()
 		}
 	}
 	e.block = t.block

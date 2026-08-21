@@ -66,6 +66,7 @@ func (md *markdown) entry(s string) entry {
 
 	if m := reBullet.FindStringSubmatch(s); m != nil {
 		return entry{
+			list:  true,
 			first: m[1] + bulletStyle.Render("• "),
 			cont:  m[1] + "  ",
 			text:  inline(m[2]),
@@ -75,6 +76,7 @@ func (md *markdown) entry(s string) entry {
 	if m := reNumbered.FindStringSubmatch(s); m != nil {
 		marker := m[2] + ". "
 		return entry{
+			list:  true,
 			first: m[1] + bulletStyle.Render(marker),
 			cont:  m[1] + strings.Repeat(" ", len(marker)),
 			text:  inline(m[3]),
