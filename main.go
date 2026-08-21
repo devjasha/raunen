@@ -16,6 +16,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"raunen/internal/agent"
+	"raunen/internal/attach"
 	"raunen/internal/companion"
 	"raunen/internal/config"
 	"raunen/internal/instructions"
@@ -60,6 +61,8 @@ func run() error {
 		asJSON     = flag.Bool("json", false, "with a prompt, print one JSON result instead of prose")
 		noSave     = flag.Bool("no-save", false, "with a prompt, do not save the session")
 	)
+	var images imagePaths
+	flag.Var(&images, "image", "attach an image `file` to the prompt (repeatable)")
 	flag.Parse()
 
 	// A subcommand rather than a flag: `raunen acp` starts a server that speaks
@@ -206,7 +209,14 @@ func run() error {
 		// the scripted case too — that is where the same instructions are most
 		// often repeated.
 		prompt, _ := cfg.ExpandSkills(strings.Join(args, " "))
-		return oneShot(ag, sess, prompt, oneShotOpts{json: *asJSON, save: !*noSave})
+		// Loaded before the turn starts so a bad path fails immediately, with
+		// its own message, rather than after the model has been paid to read
+		// half a question.
+		attached, err := images.load()
+		if err != nil {
+			return err
+		}
+		return oneShot(ag, sess, prompt, oneShotOpts{json: *asJSON, save: !*noSave, images: attached})
 	}
 
 	// The two slow parts of startup, finished off the critical path so the
@@ -969,4 +979,31 @@ func mcpLogout(cfg *config.Config) func(string) error {
 		}
 		return store.Forget(def.OAuth.Issuer, resource)
 	}
+}
+
+// imagePaths collects a repeatable --image flag. flag.Value rather than a
+// comma-separated string, because a screenshot's path frequently contains a
+// comma and splitting on one would break it in a way that is hard to see.
+type imagePaths []string
+
+func (p *imagePaths) String() string { return strings.Join(*p, ", ") }
+
+func (p *imagePaths) Set(v string) error {
+	*p = append(*p, v)
+	return nil
+}
+
+// load reads every attachment, naming the file that failed. One bad path fails
+// the run: a scripted turn that quietly asked about fewer images than it was
+// given would produce an answer that looks right and is not.
+func (p imagePaths) load() ([]provider.Image, error) {
+	var out []provider.Image
+	for _, path := range p {
+		img, err := attach.Load(path)
+		if err != nil {
+			return nil, fmt.Errorf("--image %s: %w", path, err)
+		}
+		out = append(out, img)
+	}
+	return out, nil
 }

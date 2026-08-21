@@ -61,10 +61,9 @@ type AgentCapabilities struct {
 
 // PromptCapabilities says what a prompt may contain.
 //
-// Image and audio are false: raunen's provider client sends message content as
-// a plain string, and models are filtered to those that can answer a chat turn.
-// Claiming otherwise would have an editor send an attachment that silently
-// vanished, which is worse than the editor greying the button out.
+// Audio is false: nothing downstream can do anything with it, and claiming
+// otherwise would have an editor send an attachment that silently vanished,
+// which is worse than the editor greying the button out.
 type PromptCapabilities struct {
 	Image           bool `json:"image"`
 	Audio           bool `json:"audio"`
@@ -188,6 +187,10 @@ type ContentBlock struct {
 	// editor. Kept raw so an unfamiliar shape is passed through rather than
 	// dropped on the floor.
 	Resource json.RawMessage `json:"resource,omitempty"`
+	// Data and MIMEType carry an "image": base64 bytes the editor has already
+	// read, so there is no path to open and no file the agent needs access to.
+	Data     string `json:"data,omitempty"`
+	MIMEType string `json:"mimeType,omitempty"`
 }
 
 // TextBlock builds the content block for a piece of prose.

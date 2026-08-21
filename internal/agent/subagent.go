@@ -122,7 +122,7 @@ func (a *Agent) runTask(ctx context.Context, raw json.RawMessage) (string, error
 	child.messages = []provider.Message{{Role: provider.System, Content: child.prompt()}}
 
 	events := make(chan Event, 64)
-	go child.run(ctx, args.Prompt, events)
+	go child.run(ctx, args.Prompt, nil, events)
 
 	// Forward the child's events to the frontend as they arrive, and keep its
 	// closing text. Approvals travel through untouched, reply channel and all,

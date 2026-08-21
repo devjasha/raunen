@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -250,10 +251,14 @@ func TestInitializeNegotiates(t *testing.T) {
 	if !res.AgentCapabilities.LoadSession {
 		t.Error("loadSession should be advertised: saved sessions already exist")
 	}
-	// Promising image support would have an editor send an attachment that
-	// silently vanished, since content goes to the provider as a plain string.
-	if res.AgentCapabilities.PromptCapabilities.Image {
-		t.Error("image support is advertised but not implemented")
+	// Image blocks are forwarded to the model as attachments, so the capability
+	// is advertised. Audio is not: nothing downstream could act on it, and an
+	// editor should grey the button out rather than send into a void.
+	if !res.AgentCapabilities.PromptCapabilities.Image {
+		t.Error("image support should be advertised")
+	}
+	if res.AgentCapabilities.PromptCapabilities.Audio {
+		t.Error("audio support is advertised but not implemented")
 	}
 	if res.AgentInfo == nil || res.AgentInfo.Name != "raunen" {
 		t.Errorf("agentInfo = %+v", res.AgentInfo)
@@ -487,5 +492,41 @@ func TestToolKindAndTitle(t *testing.T) {
 		if got := toolTitle(tc.name, tc.args); got != tc.title {
 			t.Errorf("toolTitle(%q) = %q, want %q", tc.name, got, tc.title)
 		}
+	}
+}
+
+// An editor sends an attachment inline, as base64 with its type. It has to
+// reach the model as an image rather than as a wall of base64 in the prose.
+func TestPromptImagesAreDecoded(t *testing.T) {
+	png := base64.StdEncoding.EncodeToString(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 16)...))
+
+	got := promptImages([]ContentBlock{
+		TextBlock("what is this"),
+		{Type: "image", Data: png, MIMEType: "image/png", Name: "shot.png"},
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("decoded %d images, want 1", len(got))
+	}
+	if got[0].MIME != "image/png" || got[0].Name != "shot.png" {
+		t.Errorf("image = %+v", got[0])
+	}
+	// The prose is unchanged: an image block is not text and must not become
+	// any.
+	if txt := promptText([]ContentBlock{TextBlock("what is this"),
+		{Type: "image", Data: png, MIMEType: "image/png"}}); txt != "what is this" {
+		t.Errorf("promptText = %q, want the prose alone", txt)
+	}
+}
+
+// One unreadable attachment must not cost the whole prompt: the question is
+// still worth answering, and refusing it outright is the harsher outcome.
+func TestUndecodableImageIsSkippedNotFatal(t *testing.T) {
+	got := promptImages([]ContentBlock{
+		{Type: "image", Data: "not base64 at all!!", MIMEType: "image/png"},
+		{Type: "image", Data: base64.StdEncoding.EncodeToString([]byte("GIF89a-------")), MIMEType: "image/gif"},
+	})
+	if len(got) != 1 || got[0].MIME != "image/gif" {
+		t.Errorf("got %+v, want only the readable one", got)
 	}
 }

@@ -41,6 +41,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"raunen/internal/agent"
+	"raunen/internal/attach"
 	"raunen/internal/companion"
 	"raunen/internal/config"
 	"raunen/internal/permission"
@@ -242,6 +243,11 @@ type Model struct {
 	blockSeq int
 	// replyTo is the message being replied to, quoted into the next send.
 	replyTo string
+	// attached are images waiting to go with the next message. They are held
+	// here rather than sent on the /image command itself so a picture and the
+	// question about it arrive together: an image on its own turn makes the
+	// model describe it, which is rarely what was wanted.
+	attached []provider.Image
 
 	frame int
 
@@ -1041,6 +1047,9 @@ func (m Model) viewHeight() int {
 	if m.replyTo != "" {
 		h--
 	}
+	if len(m.attached) > 0 {
+		h--
+	}
 	return max(1, h)
 }
 
@@ -1111,6 +1120,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = nil
 		return m.send(msg.text)
 
+	case pastedMsg:
+		if msg.err != nil {
+			m.add(errStyle.Render("✗ " + msg.err.Error()))
+			return m, nil
+		}
+		m.stage(msg.img)
+		return m, nil
+
 	case mcpAuthMsg:
 		m.showMCPAuthResult(msg)
 		return m, nil
@@ -1154,6 +1171,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.persist()
 		m.input.Focus()
 		return m, textarea.Blink
+	}
+
+	// Dragging a file onto a terminal window pastes its path, so a paste that
+	// is nothing but image paths is a drop and stages them instead of typing
+	// them out. Checked before the widgets below get it, because the input is
+	// where the path would otherwise land — but only while the main input has
+	// the keyboard: a path dropped into an API key prompt is a path.
+	if p, ok := msg.(tea.PasteMsg); ok && m.keyAsk == nil && m.pick == nil && m.ask == nil {
+		if m.dropped(p.Content) {
+			return m, nil
+		}
 	}
 
 	// Anything not handled above goes to whatever currently owns the keyboard,
@@ -1870,6 +1898,9 @@ func (m *Model) send(text string) (tea.Model, tea.Cmd) {
 	// which is the point of having one — a page of house style pasted into the
 	// screen every time it is used would bury the conversation it is about.
 	sent, skills := m.cfg.ExpandSkills(sent)
+	// Staged attachments first, then any image path written into the message
+	// itself. Both go with this one turn and nothing carries over.
+	images := append(m.takeAttached(), m.detectImagePaths(text)...)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.turnSeq++
 	// Every turn answers in a fork, including one asked with nothing else
@@ -1910,9 +1941,18 @@ func (m *Model) send(text string) (tea.Model, tea.Cmd) {
 	m.scroll = 0
 	// The input stays focused and enter keeps working while the model works, so
 	// the next question can be asked without waiting for this one.
-	go t.ag.Run(ctx, sent, t.events)
+	go t.ag.RunWith(ctx, sent, images, t.events)
 
 	m.openTurn(t, text, quote)
+	// What went with the question, shown under it: the transcript is the only
+	// record of a turn, and an attachment that appears nowhere in it leaves no
+	// way to tell an image that was sent from one that failed to load.
+	for _, img := range images {
+		m.pushTurn(t, entry{
+			kind: kindNotice,
+			text: dimStyle.Render(fmt.Sprintf("  %s %s  %s", imageMark, img.Name, byteSize(len(img.Data)))),
+		})
+	}
 	// Said out loud, because everything else about the expansion is invisible:
 	// the transcript shows the reference rather than the instructions, so
 	// without this there is no way to tell a skill that was pulled in from a
@@ -2608,6 +2648,40 @@ func (m *Model) command(line string) (tea.Model, tea.Cmd) {
 		m.pick = newMCPPicker(m.cfg, counts, fails, lazy)
 		return *m, nil
 
+	case "/image", "/img":
+		if len(fields) < 2 {
+			m.add(errStyle.Render("✗ /image needs a path"))
+			return *m, nil
+		}
+		// Everything after the command, so a path with spaces in it works
+		// without quoting — screenshots are full of them.
+		m.attachImage(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), fields[0])))
+		return *m, nil
+
+	case "/images":
+		if len(fields) > 1 && fields[1] == "clear" {
+			n := len(m.attached)
+			m.attached = nil
+			m.add(dimStyle.Render(fmt.Sprintf("  dropped %d %s", n, plural(n, "image", "images"))))
+			return *m, nil
+		}
+		if len(m.attached) == 0 {
+			m.add(dimStyle.Render("  no images attached"))
+			return *m, nil
+		}
+		for _, img := range m.attached {
+			m.add(dimStyle.Render(fmt.Sprintf("  %s %s  %s", imageMark, img.Name, byteSize(len(img.Data)))))
+		}
+		return *m, nil
+
+	case "/paste":
+		// Reading the clipboard shells out to a helper, which can block on a
+		// slow compositor. Off the UI goroutine, so the terminal stays live.
+		return *m, func() tea.Msg {
+			img, err := attach.Clipboard(context.Background())
+			return pastedMsg{img: img, err: err}
+		}
+
 	case "/skills":
 		m.showSkills()
 		return *m, nil
@@ -2737,6 +2811,17 @@ func (m Model) View() tea.View {
 			quoteStyle.Render(ansi.Truncate(first, max(10, m.innerWidth()-28), "…"))+
 			dimStyle.Render(more+"  esc to drop"))
 	}
+	// Staged images, named above the input for the same reason the reply is:
+	// what the next message will carry should be visible while typing it.
+	if len(m.attached) > 0 {
+		names := make([]string, 0, len(m.attached))
+		for _, img := range m.attached {
+			names = append(names, img.Name)
+		}
+		rows = append(rows, dimStyle.Render(imageMark+" ")+
+			quoteStyle.Render(ansi.Truncate(strings.Join(names, ", "), max(10, m.innerWidth()-30), "…"))+
+			dimStyle.Render("  /images clear to drop"))
+	}
 	// Directly above the input, so the list reads as belonging to the line
 	// being typed rather than as another thing on the screen.
 	if m.sug != nil {
@@ -2791,6 +2876,9 @@ func (m Model) View() tea.View {
 		// Past the transcript, the status row and the input's top border.
 		below := m.viewHeight() + 2
 		if m.replyTo != "" {
+			below++
+		}
+		if len(m.attached) > 0 {
 			below++
 		}
 		if w := m.watched(); w != nil {

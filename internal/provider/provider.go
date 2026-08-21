@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,12 +41,38 @@ type ToolCall struct {
 	Function Function `json:"function"`
 }
 
+// Image is a picture travelling with a message. The bytes are held raw and
+// base64-encoded only on the way out: a 20 MiB screenshot costs its own size in
+// memory rather than a third as much again, and the same value can be written
+// to a session file and read back without a re-encode.
+type Image struct {
+	// MIME is the type the endpoint is told, e.g. "image/png". Sniffed from the
+	// bytes rather than taken from the extension, since a mislabelled file
+	// makes the model see nothing and say so unhelpfully.
+	MIME string `json:"mime"`
+	Data []byte `json:"data"`
+	// Name is what the user attached — a file name, or "clipboard". Shown in
+	// the transcript and given to the model, so it can be referred to by name
+	// when several are attached at once.
+	Name string `json:"name,omitempty"`
+}
+
+// DataURL renders the image the way the chat API takes it.
+func (i Image) DataURL() string {
+	return "data:" + i.MIME + ";base64," + base64.StdEncoding.EncodeToString(i.Data)
+}
+
 type Message struct {
 	Role Role `json:"role"`
 	// Content is always serialized, even when empty. An assistant message that
 	// carries only tool calls has no text, and omitting the key entirely makes
 	// Ollama reject the next request with "invalid message content type: nil".
-	Content   string     `json:"content"`
+	Content string `json:"content"`
+	// Images are attachments on a user message. They are kept beside the text
+	// rather than folded into it so that everything reading the transcript —
+	// trimming, compaction, session titles — still sees plain prose in Content.
+	// Only the wire format splits the two apart; see toWire.
+	Images    []Image    `json:"images,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ToolCallID ties a tool result back to the call that requested it.
 	ToolCallID string `json:"tool_call_id,omitempty"`
@@ -54,6 +81,126 @@ type Message struct {
 	// back; "length" means the model was cut off before it finished, which is
 	// otherwise indistinguishable from it choosing to stop.
 	Finish string `json:"-"`
+}
+
+// contentPart is one element of the array form of content. A message only takes
+// this shape when it carries an image: every endpoint accepts a bare string,
+// and not all of them accept the array, so the plain form stays the default.
+type contentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+}
+
+// wireMessage is Message as it goes over the wire: no images field, and content
+// that may be an array of parts.
+//
+// The conversion happens here rather than in Message.MarshalJSON because
+// Message is also what a session is written as, and there the attachment is
+// data to keep — with its name and its raw bytes — not a request to build. A
+// marshaller on the type would have made every save go through the wire form
+// and quietly drop the file name on the way.
+type wireMessage struct {
+	Role       Role            `json:"role"`
+	Content    json.RawMessage `json:"content"`
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Name       string          `json:"name,omitempty"`
+}
+
+func toWire(m Message) (wireMessage, error) {
+	// A plain string by default: not every endpoint accepts the array form,
+	// and several local runtimes reject it outright.
+	content, err := json.Marshal(m.Content)
+	if err != nil {
+		return wireMessage{}, err
+	}
+	if len(m.Images) > 0 {
+		parts := make([]contentPart, 0, len(m.Images)+1)
+		// The text goes first: a model reads the instruction and then looks,
+		// and several endpoints order attention that way regardless.
+		if m.Content != "" {
+			parts = append(parts, contentPart{Type: "text", Text: m.Content})
+		}
+		for _, img := range m.Images {
+			url := struct {
+				URL string `json:"url"`
+			}{URL: img.DataURL()}
+			parts = append(parts, contentPart{Type: "image_url", ImageURL: &url})
+		}
+		if content, err = json.Marshal(parts); err != nil {
+			return wireMessage{}, err
+		}
+	}
+	return wireMessage{
+		Role:       m.Role,
+		Content:    content,
+		ToolCalls:  m.ToolCalls,
+		ToolCallID: m.ToolCallID,
+		Name:       m.Name,
+	}, nil
+}
+
+// UnmarshalJSON reads both forms, because a saved session written by a newer
+// build — or by this one, with an image in it — must load in either. Content
+// that arrives as an array is flattened back into text plus images.
+func (m *Message) UnmarshalJSON(b []byte) error {
+	// A shadow type breaks the recursion into this method.
+	type plain Message
+	var p plain
+	if err := json.Unmarshal(b, &p); err == nil {
+		*m = Message(p)
+		return nil
+	}
+	var w struct {
+		plain
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*m = Message(w.plain)
+	var parts []contentPart
+	if err := json.Unmarshal(w.Content, &parts); err != nil {
+		return err
+	}
+	var text strings.Builder
+	for _, p := range parts {
+		switch {
+		case p.Type == "image_url" && p.ImageURL != nil:
+			if img, err := decodeDataURL(p.ImageURL.URL); err == nil {
+				m.Images = append(m.Images, img)
+			}
+		case p.Text != "":
+			if text.Len() > 0 {
+				text.WriteString("\n")
+			}
+			text.WriteString(p.Text)
+		}
+	}
+	m.Content = text.String()
+	return nil
+}
+
+// decodeDataURL reverses DataURL. Only the inline form is understood: a remote
+// URL is someone else's fetch, and quietly turning one into a request the user
+// did not ask for is not this function's business.
+func decodeDataURL(s string) (Image, error) {
+	rest, ok := strings.CutPrefix(s, "data:")
+	if !ok {
+		return Image{}, errors.New("not a data URL")
+	}
+	meta, payload, ok := strings.Cut(rest, ",")
+	if !ok || !strings.HasSuffix(meta, ";base64") {
+		return Image{}, errors.New("not base64 data")
+	}
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return Image{}, err
+	}
+	return Image{MIME: strings.TrimSuffix(meta, ";base64"), Data: data}, nil
 }
 
 // ToolSchema is a tool as advertised to the model.
@@ -86,7 +233,7 @@ func New(baseURL, apiKey, model string) *Client {
 
 type request struct {
 	Model         string         `json:"model"`
-	Messages      []Message      `json:"messages"`
+	Messages      []wireMessage  `json:"messages"`
 	Tools         []ToolSchema   `json:"tools,omitempty"`
 	Stream        bool           `json:"stream"`
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
@@ -146,9 +293,18 @@ type Handler struct {
 func (c *Client) Stream(ctx context.Context, msgs []Message, tools []ToolSchema, h Handler) (Message, Usage, error) {
 	var usage Usage
 
+	wire := make([]wireMessage, 0, len(msgs))
+	for _, m := range msgs {
+		w, err := toWire(m)
+		if err != nil {
+			return Message{}, usage, err
+		}
+		wire = append(wire, w)
+	}
+
 	body, err := json.Marshal(request{
 		Model:         c.Model,
-		Messages:      msgs,
+		Messages:      wire,
 		Tools:         tools,
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},

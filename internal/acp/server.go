@@ -2,13 +2,17 @@ package acp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
 
 	"raunen/internal/agent"
+	"raunen/internal/attach"
 	"raunen/internal/permission"
+	"raunen/internal/provider"
 	"raunen/internal/session"
 )
 
@@ -92,11 +96,10 @@ func (s *Server) initialize(_ context.Context, raw json.RawMessage) (any, error)
 		AgentCapabilities: AgentCapabilities{
 			LoadSession: true,
 			PromptCapabilities: PromptCapabilities{
-				// raunen sends message content as a plain string and filters
-				// out models that cannot answer a chat turn, so promising
-				// image or audio would have an editor send an attachment that
-				// silently vanished.
-				Image:           false,
+				// An image block is forwarded to the model as an attachment,
+				// the same as one attached in the terminal. Audio is not: there
+				// is nothing downstream that could act on it.
+				Image:           true,
 				Audio:           false,
 				EmbeddedContext: true,
 			},
@@ -235,7 +238,10 @@ func (s *Server) prompt(ctx context.Context, raw json.RawMessage) (any, error) {
 	}
 
 	text := promptText(req.Prompt)
-	if strings.TrimSpace(text) == "" {
+	images := promptImages(req.Prompt)
+	// A prompt that is nothing but an attachment is a real request — "what is
+	// this" with the picture selected — so emptiness is judged on both.
+	if strings.TrimSpace(text) == "" && len(images) == 0 {
 		return nil, errorf(codeInvalidParams, "session/prompt: the prompt is empty")
 	}
 	if sess.expand != nil {
@@ -250,7 +256,7 @@ func (s *Server) prompt(ctx context.Context, raw json.RawMessage) (any, error) {
 	sess.mu.Unlock()
 
 	events := make(chan agent.Event, 64)
-	go sess.agent.Run(turnCtx, text, events)
+	go sess.agent.RunWith(turnCtx, text, images, events)
 
 	fw := newForwarder(func(u any) error { return s.notifySession(sess.id, u) })
 
@@ -400,6 +406,35 @@ func promptText(blocks []ContentBlock) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// promptImages collects the attachments an editor sent inline.
+//
+// A block that fails to decode, or carries a format no model reads, is skipped
+// rather than failing the turn: the prose is still a question worth answering,
+// and refusing the whole prompt over one bad attachment is the harsher of the
+// two outcomes.
+func promptImages(blocks []ContentBlock) []provider.Image {
+	var out []provider.Image
+	for i, blk := range blocks {
+		if blk.Type != "image" || blk.Data == "" {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(blk.Data)
+		if err != nil {
+			continue
+		}
+		name := blk.Name
+		if name == "" {
+			name = fmt.Sprintf("image %d", i+1)
+		}
+		img, err := attach.FromBytes(data, name)
+		if err != nil {
+			continue
+		}
+		out = append(out, img)
+	}
+	return out
 }
 
 // notifySession sends one streamed update.

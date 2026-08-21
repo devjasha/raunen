@@ -295,16 +295,30 @@ func (a *Agent) overhead() int {
 // a tokenizer that would have to match whatever model is configured.
 func estimateTokens(msgs []provider.Message) int {
 	chars := 0
+	tokens := 0
 	for _, m := range msgs {
 		chars += len(m.Content) + len(m.Role) + len(m.Name)
 		for _, tc := range m.ToolCalls {
 			chars += len(tc.Function.Name) + len(tc.Function.Arguments)
 		}
+		for range m.Images {
+			// An image costs tokens by its dimensions, not its file size, and
+			// decoding every attachment on every step to find out would be far
+			// more expensive than the estimate is worth. A flat charge near the
+			// top of the usual range keeps a screenshot from being counted as
+			// free, which is what would otherwise fill the window unnoticed.
+			tokens += imageTokens
+		}
 		// Per-message framing the API adds on top of the text.
 		chars += 16
 	}
-	return chars / 4
+	return chars/4 + tokens
 }
+
+// imageTokens is what one attachment is assumed to cost. Roughly a 1024×1024
+// image on the major vision models; smaller ones are over-charged, which errs
+// towards trimming early rather than towards a rejected request.
+const imageTokens = 1500
 
 // trim drops the oldest material until the request fits, reporting how many
 // messages went. Without this the server silently truncates from the front
@@ -598,7 +612,17 @@ func (a *Agent) Restore(msgs []provider.Message) {
 // Cancelling ctx aborts the turn; the partial transcript is retained so the
 // conversation stays coherent.
 func (a *Agent) Run(ctx context.Context, input string, out chan<- Event) {
-	a.run(ctx, input, out)
+	a.run(ctx, input, nil, out)
+}
+
+// RunWith is Run with images attached to the question.
+//
+// The images stay on the user message for the whole conversation rather than
+// being described once and dropped: a later turn that asks "what colour was the
+// button" has to be able to look again, and a model that cannot look answers
+// confidently from nothing.
+func (a *Agent) RunWith(ctx context.Context, input string, images []provider.Image, out chan<- Event) {
+	a.run(ctx, input, images, out)
 }
 
 // run executes a turn until the model stops requesting tools or is cancelled.
@@ -606,11 +630,15 @@ func (a *Agent) Run(ctx context.Context, input string, out chan<- Event) {
 // finished, and if the model runs low on context it escalates to the next model
 // on the fallback ladder (see escalate) instead of being cut off. SetMaxSteps
 // can impose one as a backstop against a model that loops.
-func (a *Agent) run(ctx context.Context, input string, out chan<- Event) {
+func (a *Agent) run(ctx context.Context, input string, images []provider.Image, out chan<- Event) {
 	defer close(out)
 	a.out = out
 
-	a.messages = append(a.messages, provider.Message{Role: provider.User, Content: input})
+	a.messages = append(a.messages, provider.Message{
+		Role:    provider.User,
+		Content: withAttachments(input, images),
+		Images:  images,
+	})
 	// Each turn starts at the bottom of the ladder: a short question does not
 	// deserve the expensive model just because an earlier one needed it.
 	a.rung = 0
@@ -775,6 +803,31 @@ func (a *Agent) run(ctx context.Context, input string, out chan<- Event) {
 			return
 		}
 	}
+}
+
+// withAttachments names the attached images in the prose.
+//
+// The model sees the pictures either way, but not what they were called: an
+// image block carries no filename. Without this, "compare the two mockups"
+// leaves it unable to say which one it is talking about, and a prompt that
+// mentions diagram.png by name has nothing to tie the name to.
+func withAttachments(input string, images []provider.Image) string {
+	if len(images) == 0 {
+		return input
+	}
+	names := make([]string, 0, len(images))
+	for i, img := range images {
+		name := img.Name
+		if name == "" {
+			name = fmt.Sprintf("image %d", i+1)
+		}
+		names = append(names, name)
+	}
+	note := fmt.Sprintf("[attached: %s]", strings.Join(names, ", "))
+	if strings.TrimSpace(input) == "" {
+		return note
+	}
+	return input + "\n\n" + note
 }
 
 // dispatchAll runs a batch of tool calls and returns their results in the order
